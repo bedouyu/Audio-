@@ -15,16 +15,24 @@ const scriptOpen = ref(false);
 const scriptBusy = ref(false);
 const revoiceVoice = ref("");
 const contentLanguages = computed(() => {
-  const texts = (playback.queue?.lessons || []).map(item => item.script || "").join(" ");
+  const ready = (playback.queue?.lessons || []).map(item => item.script || "").join(" ");
+  // 失败的队列还没有就绪片段，用原始要求兜底；标题往往是中文，只在没有要求时使用，
+  // 否则会把英文内容的可选项污染成"中英双语"。
+  const texts = ready || playback.queue?.instruction || playback.queue?.title || "";
   const languages = [];
   if (/[\u3400-\u9fff]/.test(texts)) languages.push("zh");
   if (/[A-Za-z]/.test(texts)) languages.push("en");
   return languages;
 });
-const revoiceOptions = computed(() => (playback.voices || []).filter((voice) => {
-  const supported = Array.isArray(voice.languages) ? voice.languages : [String(voice.locale || "").toLowerCase()];
-  return contentLanguages.value.some(language => supported.includes(language));
-}));
+const revoiceOptions = computed(() => {
+  const voices = playback.voices || [];
+  // 判断不出内容语言时不再过滤，交给后端给出准确结论。
+  if (!contentLanguages.value.length) return voices;
+  return voices.filter((voice) => {
+    const supported = Array.isArray(voice.languages) ? voice.languages : [String(voice.locale || "").toLowerCase()];
+    return contentLanguages.value.some(language => supported.includes(language));
+  });
+});
 // 只要有脚本片段就显示换音色入口：已完成的直接换，上次失败的也能从这里重念。
 // 没有 queue_id 的旧归档记录无法定位队列，直接不显示以免点了没反应。
 const canRevoice = computed(() => active.value && !!playback.queue?.queue_id
