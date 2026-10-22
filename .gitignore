@@ -14,3 +14,4 @@ backend/config/application-private.yml
 *.pyc
 .idea/
 .vscode/
+*.lnk
