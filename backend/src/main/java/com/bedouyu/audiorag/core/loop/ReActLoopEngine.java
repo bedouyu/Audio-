@@ -78,7 +78,8 @@ public class ReActLoopEngine {
                             "tool_compaction_strategy", compactionStrategy));
             com.bedouyu.audiorag.model.dto.AgentModelReply reply;
             try {
-                reply = model.decide(messages, definitions, token, context.budget.remainingMillis());
+                reply = model.decide(messages, definitions, token, context.budget.remainingMillis(),
+                        "review_agent".equals(profile.id()) ? "review" : "default");
             } catch (RuntimeException failure) {
                 // 底层网络可能先报timeout；总deadline/取消已生效时保留正确的运行终态。
                 try { context.assertActive(); }

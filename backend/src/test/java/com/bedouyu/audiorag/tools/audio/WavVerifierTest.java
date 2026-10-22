@@ -3,6 +3,7 @@ package com.bedouyu.audiorag.tools.audio;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -218,6 +219,13 @@ class WavVerifierTest {
     void rejectsDuplicateFormatChunks() {
         assertThrows(IOException.class, () -> WavVerifier.validate(write(wave(
                 chunk("fmt ", pcmFormat()), chunk("fmt ", pcmFormat()), chunk("data", new byte[8])))));
+    }
+
+    @Test void durationComesFromTheByteRateAndDataLength() throws IOException {
+        // 32 000 字节/秒 × 2.5 秒 = 80 000 字节数据块。
+        Path file = write(wave(chunk("fmt ", pcmFormat()), chunk("data", new byte[80_000])));
+
+        assertThat(WavVerifier.durationSeconds(file)).isBetween(2.49, 2.51);
     }
 
     private Path write(byte[] bytes) throws IOException {

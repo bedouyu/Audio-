@@ -50,7 +50,8 @@ class CompletionSemanticsTest {
         var model = mock(AgentModelGateway.class);
         var first = new AgentModelReply("", "", List.of(new FunctionCall("call_1", "knowledge_search", "{}")), "tool_calls");
         var answer = new AgentModelReply("已查到资料，以下是研究报告。", "", List.of(), "stop");
-        when(model.decide(anyList(), anyList(), any(), anyLong())).thenReturn(first, answer, answer);
+        // 循环按用途选择模型（5 参重载）；Mockito 的默认方法不会转发，必须按实际调用签名桩。
+        when(model.decide(anyList(), anyList(), any(), anyLong(), anyString())).thenReturn(first, answer, answer);
         var tool = mock(FunctionTool.class);
         when(tool.definition()).thenReturn(new FunctionDefinition("knowledge_search", "查询",
                 ToolSchemas.object(Map.of())));

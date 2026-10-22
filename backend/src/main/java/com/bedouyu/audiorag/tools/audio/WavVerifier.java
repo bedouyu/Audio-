@@ -81,6 +81,32 @@ public final class WavVerifier {
         }
     }
 
+    /** 用字节率与数据块总长换算真实音频时长；只读头部，不加载音频负载。 */
+    public static double durationSeconds(Path file) throws IOException {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            long fileSize = channel.size();
+            if (fileSize < 12) throw invalid("truncated RIFF header");
+            long byteRate = 0, dataBytes = 0, position = 12;
+            while (position + 8 <= fileSize) {
+                ByteBuffer chunk = read(channel, position, 8);
+                int type = chunk.getInt();
+                long length = Integer.toUnsignedLong(chunk.getInt());
+                long payload = position + 8;
+                if (payload + length > fileSize) break;
+                if (type == FORMAT && length >= 16) {
+                    ByteBuffer format = read(channel, payload, 16);
+                    format.getShort(); format.getShort(); format.getInt();
+                    byteRate = Integer.toUnsignedLong(format.getInt());
+                } else if (type == DATA) {
+                    dataBytes += length;
+                }
+                position = payload + length + (length & 1);
+            }
+            if (byteRate <= 0 || dataBytes <= 0) throw invalid("missing fmt or data chunk");
+            return (double) dataBytes / byteRate;
+        }
+    }
+
     private static int validateFormat(FileChannel channel, long position, long length) throws IOException {
         if (length < 16) {
             throw invalid("fmt chunk is shorter than 16 bytes");

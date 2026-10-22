@@ -6,6 +6,7 @@ import com.bedouyu.audiorag.agent.audio.AudioAgent.CoursePlan;
 import com.bedouyu.audiorag.agent.audio.AudioAgent.LessonCommand;
 import com.bedouyu.audiorag.common.ApiException;
 import com.bedouyu.audiorag.common.SpeechTiming;
+import com.bedouyu.audiorag.tools.audio.SpeechRateCalibration;
 import com.bedouyu.audiorag.tools.audio.SpeechService;
 import com.bedouyu.audiorag.tools.audio.WavVerifier;
 import jakarta.annotation.PreDestroy;
@@ -39,6 +40,11 @@ public class ContinuousAudioService {
     private final StringRedisTemplate redis;
     private final ObjectMapper json;
     private final ExecutorService executor;
+    /** 用真实合成结果校准语速；手工构造（测试）时保持默认实例，不依赖 Spring 注入。 */
+    private SpeechRateCalibration calibration = new SpeechRateCalibration();
+
+    @Autowired(required = false)
+    void setCalibration(SpeechRateCalibration value) { this.calibration = value; }
 
     @Autowired
     public ContinuousAudioService(AudioAgent agent, SpeechService speech, ContinuousAudioStore store,
@@ -181,6 +187,14 @@ public class ContinuousAudioService {
         return result;
     }
 
+    private void learnSpeechRate(String script, String audioId) {
+        try {
+            calibration.learn(script, WavVerifier.durationSeconds(speech.audioFile(audioId + ".wav")));
+        } catch (IOException | RuntimeException ignored) {
+            // 校准是可选优化，读不到时长不能影响已经成功的合成结果。
+        }
+    }
+
     private void generate(long userId, String queueId, int maximum) {
         var token = store.claimGeneration(userId, queueId);
         if (token.isEmpty()) return;
@@ -201,6 +215,7 @@ public class ContinuousAudioService {
                         try {
                             String url = speech.synthesize(claim.audioId(), claim.draft().script(), claim.command().voice());
                             WavVerifier.validate(speech.audioFile(claim.audioId() + ".wav"));
+                            learnSpeechRate(claim.draft().script(), claim.audioId());
                             store.complete(userId, claim, url);
                         } catch (Exception error) {
                             store.uncertain(userId, claim, error.getMessage());
@@ -261,7 +276,7 @@ public class ContinuousAudioService {
 
     private List<String> splitCourse(String script, int segmentMinutes) {
         if (script == null || script.isBlank()) throw new IllegalArgumentException("课程讲稿为空");
-        int target = (int) Math.max(600, SpeechTiming.targetCharacters(script, segmentMinutes));
+        int target = (int) Math.max(600, SpeechTiming.targetCharacters(script, segmentMinutes) * calibration.scale());
         List<String> parts = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         for (String paragraph : script.split("\\n\\s*\\n")) {
@@ -279,7 +294,7 @@ public class ContinuousAudioService {
 
     /** Preserve every original character; generated script splitting may normalise paragraph boundaries. */
     private List<String> splitExact(String script, int minutes) {
-        int target = (int) Math.max(260, SpeechTiming.targetCharacters(script, minutes));
+        int target = (int) Math.max(260, SpeechTiming.targetCharacters(script, minutes) * calibration.scale());
         List<String> result = new ArrayList<>();
         for (int start = 0; start < script.length();) {
             int end = Math.min(script.length(), start + target);

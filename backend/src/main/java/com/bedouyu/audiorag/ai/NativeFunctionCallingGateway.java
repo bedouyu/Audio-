@@ -29,6 +29,9 @@ public class NativeFunctionCallingGateway implements AgentModelGateway {
     private final String model;
     private final boolean thinking;
     private final ModelContextBudget budgets;
+    /** 可选的复核专用模型；留空表示复核与主流程共用同一个模型。 */
+    @Value("${audiorag.llm.review-model:}")
+    private String reviewModel = "";
     private final ThreadLocal<Map<String, Object>> observation = ThreadLocal.withInitial(Map::of);
     private final Set<InputStream> activeStreams = ConcurrentHashMap.newKeySet();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
@@ -61,9 +64,14 @@ public class NativeFunctionCallingGateway implements AgentModelGateway {
     @Override public Map<String, Object> lastObservation() { return observation.get(); }
 
     private Map<String, Object> requestBody(List<Map<String, Object>> messages, List<FunctionDefinition> tools) {
-        ModelContextBudget.Profile profile = budgets.profile(model);
+        return requestBody(messages, tools, model);
+    }
+
+    private Map<String, Object> requestBody(List<Map<String, Object>> messages, List<FunctionDefinition> tools,
+                                            String modelName) {
+        ModelContextBudget.Profile profile = budgets.profile(modelName);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("model", model); body.put("messages", messages); body.put("stream", true);
+        body.put("model", modelName); body.put("messages", messages); body.put("stream", true);
         body.put("max_tokens", profile.outputReserve());
         if (profile.streamUsageEnabled()) body.put("stream_options", Map.of("include_usage", true));
         if (!tools.isEmpty()) {
@@ -82,13 +90,25 @@ public class NativeFunctionCallingGateway implements AgentModelGateway {
     }
     @Override public AgentModelReply decide(List<Map<String, Object>> messages, List<FunctionDefinition> tools,
                                            Consumer<String> contentToken, long timeoutMillis) {
+        return decide(messages, tools, contentToken, timeoutMillis, "default");
+    }
+    /** 复核等用途可以指定第二模型；未配置复核模型时仍用主模型。 */
+    @Override public AgentModelReply decide(List<Map<String, Object>> messages, List<FunctionDefinition> tools,
+                                           Consumer<String> contentToken, long timeoutMillis, String modelTier) {
+        return decideWith(messages, tools, contentToken, timeoutMillis, modelFor(modelTier));
+    }
+    private String modelFor(String modelTier) {
+        return "review".equals(modelTier) && reviewModel != null && !reviewModel.isBlank() ? reviewModel : model;
+    }
+    private AgentModelReply decideWith(List<Map<String, Object>> messages, List<FunctionDefinition> tools,
+                                       Consumer<String> contentToken, long timeoutMillis, String modelName) {
         observation.remove();
         if (timeoutMillis <= 0) throw new IllegalStateException("Agent 模型调用剩余时间预算已耗尽");
         long requestTimeoutMillis = Math.min(120_000, timeoutMillis);
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMillis);
         if (!configured()) throw new IllegalStateException("未配置 Agent 模型密钥");
-        Map<String, Object> body = requestBody(messages, tools);
-        var budget = budgets.inspect(model, body);
+        Map<String, Object> body = requestBody(messages, tools, modelName);
+        var budget = budgets.inspect(modelName, body);
         observation.set(Map.of("budget", budget.data()));
         if (!budget.withinBudget()) throw new ModelContextBudgetException(budget);
         long httpRemainingNanos = deadline - System.nanoTime();

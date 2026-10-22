@@ -71,7 +71,7 @@ public class AgentOrchestrator {
             runs.saveSpecification(run, context.taskSpecification.data());
             var outputs = artifacts.forRun(user, command.projectId(), run);
             boolean awaiting = outputs.stream().anyMatch(a -> Set.of("SCRIPT_DRAFT", "LEARNING_PLAN").contains(a.get("kind"))
-                    && !Set.of("READY", "APPLIED").contains(a.get("status")));
+                    && "DRAFT".equals(a.get("status")));
             if (awaiting) answer = "本轮有待你确认的音频产物，请在草稿页审核后执行。\n\n" + answer;
             context.assertActive();
             runs.assertCurrentInstanceLease();

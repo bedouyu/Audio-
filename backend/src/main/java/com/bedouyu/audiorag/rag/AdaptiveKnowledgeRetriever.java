@@ -38,6 +38,8 @@ public class AdaptiveKnowledgeRetriever {
         requireChoice(assembly, Set.of("top_k", "neighbors", "rse_rank_proxy"));
         if (tokenBudget < 256 || tokenBudget > 2048 || limit < 1 || limit > 6)
             throw new IllegalArgumentException("检索预算超限");
+        // 检索用去掉了制作指令的查询串；“做成 10 分钟简报”“用中文讲”不是内容词。
+        String effectiveQuery = QueryNormalizer.forRetrieval(query);
         List<String> warnings = new ArrayList<>();
         List<KnowledgeIndexDocument> allDocuments = index.documents(projectId);
         Set<String> selectedIds = new HashSet<>(documentIds);
@@ -47,7 +49,7 @@ public class AdaptiveKnowledgeRetriever {
             List<QdrantService.SearchHit> hits = new ArrayList<>(); int usedTokens = 0, usedCharacters = 0;
             List<QdrantService.SearchHit> oldHits;
             try {
-                oldHits = legacy.execute(projectId, query, limit);
+                oldHits = legacy.execute(projectId, effectiveQuery, limit);
             } catch (VectorRetrievalException failure) {
                 if (!failure.isTransient()) throw failure;
                 throw new VectorRetrievalException(VectorRetrievalException.Kind.TRANSIENT,
@@ -74,8 +76,8 @@ public class AdaptiveKnowledgeRetriever {
         // 即使 BM25 被选择，也为尚未重建的旧文档保留向量兼容分支，不静默遗漏。
         if (!"bm25".equals(retrieval) || selectedIds.isEmpty()) {
             try {
-                var hits = selectedIds.isEmpty() ? qdrant.search(query, CANDIDATE_DEPTH, projectId)
-                        : qdrant.searchIndexed(query, CANDIDATE_DEPTH, projectId, documentIds);
+                var hits = selectedIds.isEmpty() ? qdrant.search(effectiveQuery, CANDIDATE_DEPTH, projectId)
+                        : qdrant.searchIndexed(effectiveQuery, CANDIDATE_DEPTH, projectId, documentIds);
                 for (var hit : hits) {
                     TextSegment chunk = byPoint.get(hit.id());
                     if (chunk != null) dense.add(new RankedChunk(chunk, hit.score(), dense.size()));
@@ -92,7 +94,7 @@ public class AdaptiveKnowledgeRetriever {
             }
         }
         Bm25IndexCache.View lexicalIndex = "dense".equals(retrieval) && !denseFailed ? null : lexicalCache.acquire(projectId, chunks);
-        List<RankedChunk> lexical = lexicalIndex == null ? List.of() : lexicalIndex.ranker().rank(query, CANDIDATE_DEPTH);
+        List<RankedChunk> lexical = lexicalIndex == null ? List.of() : lexicalIndex.ranker().rank(effectiveQuery, CANDIDATE_DEPTH);
         String actualRetrieval = denseFailed ? "bm25_fallback" : retrieval;
         List<RankedChunk> candidates = denseFailed || "bm25".equals(retrieval) ? lexical
                 : "dense".equals(retrieval) ? dense : HybridRanking.fuse(dense, lexical, CANDIDATE_DEPTH);

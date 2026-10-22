@@ -33,6 +33,13 @@ public class AgentArtifactStore {
         requireProject(user, project);
         var owner = lockRun(user, project, run);
         if (!"RUNNING".equals(owner.getStatus())) throw conflict("任务已结束，不能追加产物");
+        // 复核未通过时主控会重新委派写手；新讲稿必须取代同任务的旧草稿，
+        // 否则用户会看到两份"待确认"讲稿，也说不清该确认哪一份。
+        // 只对讲稿生效：学习计划允许在同一任务里各自确认，研究报告与复核报告是中间证据。
+        if ("SCRIPT_DRAFT".equals(kind))
+            for (var previous : artifacts.findByRunIdOrderByCreatedAtAsc(run))
+                if (kind.equals(previous.getKind()) && "DRAFT".equals(previous.getStatus()))
+                    previous.supersede();
         var artifact = artifacts.saveAndFlush(new AgentArtifact(UUID.randomUUID().toString(), run, user,
                 project, agent, kind, content, json.writeValueAsString(inputIds), json.writeValueAsString(citations)));
         return view(artifact);

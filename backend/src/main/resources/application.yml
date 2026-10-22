@@ -76,6 +76,8 @@ audiorag:
     base-url: ${AUDIORAG_LLM_BASE_URL:https://api.deepseek.com}
     api-key: ${AUDIORAG_LLM_API_KEY:${DEEPSEEK_API_KEY:}}
     model: ${AUDIORAG_LLM_MODEL:deepseek-flash}
+    # 可选的复核专用模型；留空表示复核与主流程共用 model。填写未知模型时需同时配置 context-window。
+    review-model: ${AUDIORAG_LLM_REVIEW_MODEL:}
     # 这是本机保守上限，不冒称供应商实际窗口；未知模型请核验能力后明确配置。
     context-window: ${AUDIORAG_LLM_CONTEXT_WINDOW:65536}
     budget-profile: ${AUDIORAG_LLM_BUDGET_PROFILE:local_conservative_cap}

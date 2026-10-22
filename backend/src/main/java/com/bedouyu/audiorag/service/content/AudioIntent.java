@@ -96,13 +96,23 @@ public record AudioIntent(String instruction, String language, int durationMinut
         };
     }
 
+    /** 下限：实测写手会稳定少写 10—15%，只给目标值时更容易偏短。 */
+    public String lengthFloor() {
+        return switch (language) {
+            case "en" -> Math.round(durationMinutes * SpeechTiming.LATIN_WORDS_PER_MINUTE * 0.9) + " 个英文单词";
+            case "bilingual" -> perMinute(120) + " 字加 " + perMinute(68) + " 词";
+            default -> Math.round(durationMinutes * SpeechTiming.CJK_CHARACTERS_PER_MINUTE * 0.9) + " 个汉字";
+        };
+    }
+
     /** 注入主控的服务端解析提示：只陈述事实与硬约束，不替用户改变要求。 */
     public String agentHint() {
         boolean explicit = explicitMinutes(instruction).isPresent();
         StringBuilder hint = new StringBuilder("服务端确定性解析（供参考，用户原话与后续更正优先）：语言=")
                 .append(languageLabel());
         if (explicit) {
-            hint.append("；目标时长≈").append(durationMinutes).append(" 分钟，正文应").append(lengthHint());
+            hint.append("；目标时长≈").append(durationMinutes).append(" 分钟，正文应").append(lengthHint())
+                    .append("（不少于 ").append(lengthFloor()).append("）");
         } else {
             // 用户没写时长时不能把服务端默认值伪装成要求，否则会缩窄结果。
             hint.append("；用户没有指定时长，篇幅按内容需要决定（服务端默认约 ").append(durationMinutes).append(" 分钟，不是硬要求）");
