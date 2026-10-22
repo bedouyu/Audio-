@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { Headphones, Play } from "lucide-vue-next";
 import { canRefill } from "../../../shared/audio-queue-policy.js";
 import AudioRequestComposer from "./AudioRequestComposer.vue";
@@ -25,7 +25,15 @@ const revoiceOptions = computed(() => (playback.voices || []).filter((voice) => 
   const supported = Array.isArray(voice.languages) ? voice.languages : [String(voice.locale || "").toLowerCase()];
   return contentLanguages.value.some(language => supported.includes(language));
 }));
-const canRevoice = computed(() => active.value && playback.queue?.status === "COMPLETE" && revoiceOptions.value.length > 0);
+// 只要这段音频已经完成过，就显示换音色入口；整条队列还在生成时按钮先禁用。
+// 没有 queue_id 的旧记录（历史归档音频）无法定位队列，直接不显示以免点了没反应。
+const canRevoice = computed(() => active.value && !!playback.queue?.queue_id
+  && playback.queue?.status !== "CANCELLED"
+  && (playback.queue?.lessons?.length || 0) > 0 && revoiceOptions.value.length > 0);
+const revoiceBlocked = computed(() => playback.queue?.status !== "COMPLETE"
+  && ["PREPARING", "GENERATING"].includes(playback.queue?.status));
+// 后端可能重启过，登录时读到的音色列表会变旧；进入音频页时再刷一次。
+onMounted(() => props.audio.refreshVoices?.());
 async function confirmRevoice() {
   const voice = revoiceOptions.value.find(item => item.name === revoiceVoice.value);
   if (!voice) return;
@@ -95,11 +103,14 @@ async function exportRecord(record) {
             {{ voice.display_name || voice.name }}
           </option>
         </select>
-        <button :disabled="!revoiceVoice || playback.revoicing" @click="confirmRevoice">
+        <button :disabled="!revoiceVoice || playback.revoicing || revoiceBlocked" @click="confirmRevoice">
           {{ playback.revoicing ? "正在重念…" : "换音色重制" }}
         </button>
       </div>
-      <p v-if="canRevoice" class="muted">讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</p>
+      <p v-if="canRevoice" class="muted">
+        <template v-if="revoiceBlocked">正在生成内容，等这批片段完成后再换音色。</template>
+        <template v-else>讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</template>
+      </p>
       <details v-if="current?.script"><summary>查看当前文字稿</summary><pre>{{ current.script }}</pre></details>
       <details v-if="sources.length"><summary>参考来源 · {{ sources.length }}</summary>
         <div v-for="(item, index) in sources" :key="index" class="content-source">

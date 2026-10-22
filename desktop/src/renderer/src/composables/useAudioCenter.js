@@ -167,6 +167,7 @@ export function useAudioCenter(workspace) {
       if (pollingId === id) pollingId = null;
     }
   }
+  async function refreshVoices() { await loadVoices(identity); }
   async function loadVoices(version) {
     try {
       const result = await api("/api/v1/audio/voices");
@@ -197,7 +198,7 @@ export function useAudioCenter(workspace) {
       state.restoring = true; startPolling(); await poll();
       if (version === revision) await restoreProgress(saved);
     } else {
-      state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1, lessons: [saved.record] };
+      state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1, queue_id: record.metadata?.queue_id, lessons: [saved.record] };
       rememberCheckpoint(saved.savedAt);
     }
   }, { immediate: true });
@@ -300,7 +301,7 @@ export function useAudioCenter(workspace) {
   function previous() { return select(state.index - 1); }
   function playRecord(record, project) {
     save(true); player?.pause(); clearInterval(timer); revision++;
-    state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1,
+    state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1, queue_id: record.metadata?.queue_id,
       lessons: [{ title: record.title, script: record.content, audio_url: record.metadata?.audio_url, citations: record.metadata?.citations }] };
     state.project = project; state.instruction = ""; state.index = 0; state.time = 0;
     state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = true; state.error = ""; save(); nextTick(attemptPlay);
@@ -404,7 +405,7 @@ export function useAudioCenter(workspace) {
       for (const action of ["play", "pause", "nexttrack", "previoustrack"]) navigator.mediaSession.setActionHandler(action, null);
     }
   });
-  return { state, current, source, total, message, bindPlayer, submit, poll, refill, revoice, next, previous,
+  return { state, current, source, total, message, bindPlayer, submit, poll, refill, revoice, refreshVoices, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
     openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
 }
