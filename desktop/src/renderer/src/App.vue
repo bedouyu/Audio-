@@ -151,7 +151,7 @@ onMounted(async () => {
 });
 </script>
 <template>
-  <div class="application">
+  <div class="application" :class="{ 'auth-mode': !state.user }">
     <header class="app-bar">
       <div class="brand">
         <Headphones :size="22" /><span>Audio智能助手</span

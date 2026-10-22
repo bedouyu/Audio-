@@ -558,8 +558,10 @@ pre {
 .auth-screen {
   flex: 1;
   display: grid;
-  place-items: center;
-  background: radial-gradient(ellipse at center, #edf2ef, #f8f9fb);
+  /* 背景是插画，登录卡落在右下方的留白处，左边留给画面主体。 */
+  place-items: center end;
+  padding: 24px clamp(24px, 7vw, 140px) 24px 24px;
+  background: none;
 }
 .auth-card {
   padding: 35px;
@@ -567,7 +569,7 @@ pre {
   background: #fff;
   border: 1px solid #e1e6eb;
   border-radius: 14px;
-  box-shadow: 0 12px 40px #25382a07;
+  box-shadow: 0 18px 56px #1d33272e;
 }
 .auth-card h1 {
   font-size: 25px;
@@ -577,6 +579,21 @@ pre {
 }
 .auth-card small {
   font-size: 10px;
+}
+/* 未登录时整页使用插画背景，顶栏透明覆在图上；登录卡落在画面右侧留白。 */
+.application.auth-mode {
+  background: url("./assets/login-background.jpg") center / cover no-repeat;
+}
+.application.auth-mode .app-bar {
+  /* 插画顶部偏亮，用一层浅色渐变托住品牌与连接状态，避免深色文字糊在背景里。 */
+  background: linear-gradient(180deg, #ffffffe0 0%, #ffffff80 62%, #ffffff00 100%);
+  border-bottom-color: transparent;
+}
+@media (max-width: 900px) {
+  .auth-screen {
+    place-items: center;
+    padding: 24px;
+  }
 }
 @media (max-width: 1200px) {
   .workspace {
