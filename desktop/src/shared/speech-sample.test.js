@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   MAX_SECONDS, MIN_SECONDS, TARGET_RATE, downmix, durationHint, encodeWav16,
-  resample, sampleFromAudioBuffer, secondsOf, trimSilence,
+  expectedSeconds, readingVerdict, resample, sampleFromAudioBuffer, secondsOf, trimSilence,
 } from "./speech-sample.js";
+import { RECORDING_SCRIPTS, scriptsFor } from "./voice-scripts.js";
 
 function buffer(channels, rate, seconds, tone = 0.2) {
   const data = [];
@@ -66,4 +67,39 @@ test("durationHint reports the same bounds the server enforces", () => {
   assert.match(durationHint(10), /可以录入/);
   assert.match(durationHint(0), /没有可用/);
   assert.equal(MIN_SECONDS, 3);
+});
+
+test("expectedSeconds follows the speech rate the backend uses", () => {
+  const chinese = "今天的天气很好，我打算去公园走一走。路上会经过一家小店，那里卖的豆浆特别香，每次路过都想停下脚步。";
+  const seconds = expectedSeconds(chinese);
+  assert.ok(seconds > 13 && seconds < 17, `got ${seconds}s for ${chinese.length} chars`);
+  assert.equal(expectedSeconds(""), 0);
+  // 英文按词计算：25 个词约 10 秒。
+  const english = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+  assert.ok(Math.abs(expectedSeconds(english) - 8) < 0.5);
+});
+
+test("readingVerdict flags a recording that is clearly shorter than the script", () => {
+  assert.equal(readingVerdict(6, 15), "short");
+  assert.equal(readingVerdict(14, 15), "ok");
+  assert.equal(readingVerdict(9, 15), "ok");
+  assert.equal(readingVerdict(40, 15), "long");
+  assert.equal(readingVerdict(9, 0), "ok");
+});
+
+test("every recording script is a comfortable 8-20 second read", () => {
+  assert.ok(RECORDING_SCRIPTS.length >= 2);
+  const ids = new Set();
+  for (const script of RECORDING_SCRIPTS) {
+    assert.ok(["zh", "en"].includes(script.language), script.id);
+    assert.ok(!ids.has(script.id), "duplicate id " + script.id);
+    ids.add(script.id);
+    const seconds = expectedSeconds(script.text);
+    assert.ok(seconds >= 8 && seconds <= 20, `${script.id} reads in ${seconds.toFixed(1)}s`);
+    // 避免数字与缩写：文本规范化会改变它们的 token。
+    assert.ok(!/[0-9]/.test(script.text), script.id + " contains digits");
+  }
+  assert.deepEqual(scriptsFor("zh").map((item) => item.language), ["zh", "zh"]);
+  assert.deepEqual(scriptsFor("en").map((item) => item.language), ["en", "en"]);
+  assert.equal(scriptsFor("fr").length, RECORDING_SCRIPTS.length);
 });

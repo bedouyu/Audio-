@@ -6,6 +6,30 @@
 export const TARGET_RATE = 16000;
 export const MIN_SECONDS = 3;
 export const MAX_SECONDS = 30;
+// 与后端 SpeechTiming 保持一致：中文按字、英文按词，实测中文约 193 字/分钟。
+export const CJK_PER_MINUTE = 195;
+export const WORDS_PER_MINUTE = 150;
+
+/** 估算一段文字读出来需要多久，用来判断录音是否大致读完了这段话。 */
+export function expectedSeconds(text) {
+  const value = String(text || "");
+  const cjk = (value.match(/[\u3400-\u9fff]/g) || []).length;
+  const words = (value.replace(/[\u3400-\u9fff]/g, " ").match(/[A-Za-z0-9']+/g) || []).length;
+  return (cjk / CJK_PER_MINUTE) * 60 + (words / WORDS_PER_MINUTE) * 60;
+}
+
+/**
+ * 录音是否覆盖了给定文字。明显偏短通常意味着没读完，这样的样例会让音色走样；
+ * 放宽到 0.55 是为了容忍语速快的人，低于此值就要求重录。
+ */
+export function readingVerdict(actualSeconds, expected) {
+  if (!expected || !Number.isFinite(actualSeconds)) return "ok";
+  const ratio = actualSeconds / expected;
+  if (ratio < 0.55) return "short";
+  if (ratio > 2.5) return "long";
+  return "ok";
+}
+
 
 export function downmix(buffer) {
   const channels = buffer.numberOfChannels;
