@@ -277,7 +277,7 @@ class VoiceImportTests(unittest.TestCase):
             root = Path(temp).resolve()
             service, engine = self.service(root, self.manifest(root))
             service.import_voice(self.payload())
-            entries = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
+            entries = json.loads((root / "voices.local.json").read_text(encoding="utf-8"))["voices"]
             stored = next(entry for entry in entries if entry["name"] == "my-voice")
             self.assertIn("<|endofprompt|>", stored["prompt_text"])
             registered = engine.model.add_zero_shot_spk.call_args[0]
@@ -288,7 +288,7 @@ class VoiceImportTests(unittest.TestCase):
             root = Path(temp).resolve()
             service, _ = self.service(root, self.manifest(root))
             service.import_voice(self.payload())
-            text = (root / "voices.json").read_text(encoding="utf-8")
+            text = (root / "voices.local.json").read_text(encoding="utf-8")
             # languages 保持单行，避免每次录入都把整份配置重新排版。
             self.assertIn('"languages": ["zh"]', text)
             self.assertIn('"prompt_wav": "asset/voices/my-voice.wav"', text)
@@ -307,10 +307,22 @@ class VoiceImportTests(unittest.TestCase):
             with wave.open(str(saved), "rb") as decoded:
                 self.assertEqual(16000, decoded.getframerate())
                 self.assertEqual(1, decoded.getnchannels())
-            entries = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
-            self.assertEqual({"demo", "my-voice"}, {entry["name"] for entry in entries})
+            entries = json.loads((root / "voices.local.json").read_text(encoding="utf-8"))["voices"]
+            self.assertEqual({"my-voice"}, {entry["name"] for entry in entries})
+            # 内置清单属于仓库内容，录入不得改动它。
+            seed = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
+            self.assertEqual({"demo"}, {entry["name"] for entry in seed})
             engine.model.add_zero_shot_spk.assert_called_once()
             self.assertIn("my-voice", {voice.name for voice in engine.voices})
+
+    def test_local_manifest_is_merged_with_the_bundled_one(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            service, _ = self.service(root, self.manifest(root))
+            service.import_voice(self.payload())
+            voice_dir = root / "asset" / "voices"
+            self.assertEqual({"demo", "my-voice"}, {voice.name for voice in service.engine.voices})
+            self.assertTrue((voice_dir / "my-voice.wav").is_file())
 
     def test_duplicate_or_invalid_imports_are_rejected_without_touching_state(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -327,6 +339,7 @@ class VoiceImportTests(unittest.TestCase):
 
             engine.model.add_zero_shot_spk.assert_not_called()
             self.assertFalse((root / "asset" / "voices").exists())
+            self.assertFalse((root / "voices.local.json").exists())
 
     def test_only_imported_voices_can_be_deleted(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -336,9 +349,10 @@ class VoiceImportTests(unittest.TestCase):
 
             service.delete_voice("my-voice")
 
-            entries = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
-            self.assertEqual({"demo"}, {entry["name"] for entry in entries})
+            # 只剩内置音色时，录入清单整个删除，配置回到初始状态。
+            self.assertFalse((root / "voices.local.json").exists())
             self.assertFalse((root / "asset" / "voices" / "my-voice.wav").exists())
+            self.assertEqual({"demo"}, {voice.name for voice in service.engine.voices})
             with self.assertRaises(ServiceError) as builtin:
                 service.delete_voice("demo")
             self.assertEqual(409, builtin.exception.status)

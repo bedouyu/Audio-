@@ -89,11 +89,24 @@ class Voice:
         }
 
 
-def load_voices(filename: Path, repo_root: Path) -> tuple[Voice, ...]:
-    root = repo_root.resolve(strict=True)
+def read_manifest(filename: Path) -> list:
+    """读取一份音色清单；文件不存在时返回空列表（录入清单是可选文件）。"""
+    if not filename.is_file():
+        return []
     data = json.loads(filename.read_text(encoding="utf-8-sig"))
     entries = data.get("voices") if isinstance(data, dict) else None
-    if not isinstance(entries, list) or not entries:
+    if not isinstance(entries, list):
+        raise ValueError("音色配置必须包含 voices 列表")
+    return entries
+
+
+def load_voices(filename: Path, repo_root: Path, local_file: Path | None = None) -> tuple[Voice, ...]:
+    """内置清单（随仓库）与录入清单（运行时生成、已 gitignore）合并后加载。"""
+    root = repo_root.resolve(strict=True)
+    entries = read_manifest(filename)
+    if local_file is not None:
+        entries = entries + read_manifest(local_file)
+    if not entries:
         raise ValueError("音色配置必须包含非空 voices 列表")
     voices = []
     seen = set()
@@ -261,12 +274,15 @@ class CosyVoiceEngine:
 
 
 class AdapterService:
-    def __init__(self, max_chars: int = 20000, voices_file: Path | None = None, repo_root: Path | None = None):
+    def __init__(self, max_chars: int = 20000, voices_file: Path | None = None, repo_root: Path | None = None,
+                 local_file: Path | None = None):
         self.max_chars = max_chars
         self.engine = None
         self.initialization_error = False
         self.lock = threading.Lock()
+        # voices_file 是随仓库提交的内置清单；录入的音色写到 local_file，不进版本控制。
         self.voices_file = voices_file
+        self.local_file = local_file or (voices_file.with_name("voices.local.json") if voices_file else None)
         self.repo_root = repo_root
 
     def health(self) -> dict:
@@ -325,7 +341,7 @@ class AdapterService:
             raise ServiceError(422, "样例音频不是有效的 base64") from failure
         if len(payload) > MAX_VOICE_BYTES:
             raise ServiceError(413, "样例音频过大")
-        if self.voices_file is None or self.repo_root is None:
+        if self.local_file is None or self.repo_root is None:
             raise ServiceError(500, "音色目录未配置，无法保存")
         sample = normalize_sample(payload)
 
@@ -346,14 +362,13 @@ class AdapterService:
         finally:
             self.lock.release()
 
-        data = json.loads(self.voices_file.read_text(encoding="utf-8-sig"))
-        entries = [entry for entry in data.get("voices", []) if entry.get("name") != name]
+        # 只写录入清单：内置清单属于仓库内容，运行时不能改动它。
+        entries = [entry for entry in read_manifest(self.local_file) if entry.get("name") != name]
         entries.append({"name": name, "display_name": display, "languages": languages,
                         "prompt_wav": target.relative_to(self.repo_root).as_posix(),
                         "prompt_text": prompt_text, "enabled": True})
-        data["voices"] = entries
-        self.voices_file.write_text(dump_voices(data), encoding="utf-8")
-        LOGGER.info("Imported voice %s from %s", name, target)
+        self.local_file.write_text(dump_voices({"voices": entries}), encoding="utf-8")
+        LOGGER.info("Imported voice %s from %s into %s", name, target, self.local_file)
         return voice.public()
 
     def delete_voice(self, name: str) -> dict:
@@ -361,17 +376,16 @@ class AdapterService:
         voice = next((item for item in engine.voices if item.name == name), None)
         if voice is None:
             raise ServiceError(404, "音色不存在")
-        if self.voices_file is None or self.repo_root is None:
+        if self.local_file is None or self.repo_root is None:
             raise ServiceError(500, "音色目录未配置，无法删除")
-        custom = voice.prompt_wav.is_relative_to(self.repo_root / "asset" / "voices")
-        if not custom:
-            raise ServiceError(409, "内置示例音色不能删除")
-        data = json.loads(self.voices_file.read_text(encoding="utf-8-sig"))
-        kept = [entry for entry in data.get("voices", []) if entry.get("name") != name]
-        if not kept:
-            raise ServiceError(409, "至少要保留一个音色")
-        data["voices"] = kept
-        self.voices_file.write_text(dump_voices(data), encoding="utf-8")
+        entries = read_manifest(self.local_file)
+        if not any(entry.get("name") == name for entry in entries):
+            raise ServiceError(409, "内置音色不能删除，只能删除录入的音色")
+        kept = [entry for entry in entries if entry.get("name") != name]
+        if kept:
+            self.local_file.write_text(dump_voices({"voices": kept}), encoding="utf-8")
+        else:
+            self.local_file.unlink(missing_ok=True)
         voice.prompt_wav.unlink(missing_ok=True)
         engine.model.frontend.spk2info.pop(name, None)
         engine.voices = tuple(item for item in engine.voices if item.name != name)
@@ -522,12 +536,14 @@ def main():
     if not 1 <= args.port <= 65535 or not 1 <= args.max_chars <= 100000:
         parser.error("端口或文字长度上限无效")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    service = AdapterService(args.max_chars, voices_file=voices_file, repo_root=repo_root)
+    # 录入的音色写到 voices.local.json（已 gitignore），内置清单保持仓库内容不变。
+    local_file = voices_file.with_name("voices.local.json")
+    service = AdapterService(args.max_chars, voices_file=voices_file, repo_root=repo_root, local_file=local_file)
 
     def initialize():
         try:
             LOGGER.info("Loading CosyVoice model and reference voices")
-            voices = load_voices(voices_file, repo_root)
+            voices = load_voices(voices_file, repo_root, local_file)
             engine = CosyVoiceEngine(repo_root, model_dir, voices, args.allow_cpu)
             service.engine = engine
             LOGGER.info("READY model=%s device=%s sample_rate=%s voices=%s", engine.model_name, engine.device, engine.sample_rate, len(engine.voices))

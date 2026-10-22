@@ -15,3 +15,4 @@ backend/config/application-private.yml
 .idea/
 .vscode/
 *.lnk
+tools/cosyvoice/voices.local.json
