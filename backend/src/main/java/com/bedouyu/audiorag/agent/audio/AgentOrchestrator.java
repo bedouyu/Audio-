@@ -56,6 +56,13 @@ public class AgentOrchestrator {
             context.emit("task_specification", "", "RUNNING", "独立最低完成规格已建立",
                     Map.of("task_specification", context.taskSpecification.data()));
             context.recentTaskRecords = runs.recentContext(user, command.projectId(), session, run);
+            try {
+                // 服务端已经把语言/时长/日期解析成确定值，直接告诉主控，省掉一轮模型自行猜测。
+                context.intentHint = com.bedouyu.audiorag.service.content.AudioIntent
+                        .resolve(command.message(), 5).agentHint();
+            } catch (RuntimeException ignored) {
+                // 解析失败（例如超出 1—60 分钟）时退回由模型自行理解，不阻断任务。
+            }
             var prepared = memory.prepare(user, command.projectId(), session, command.message(), command.memoryStrategy());
             context.memoryData = prepared.modelData();
             context.emit("memory_prepare", "", "COMPLETED", "会话上下文已按策略组装", Map.of("memory", context.memoryData));
@@ -98,6 +105,8 @@ public class AgentOrchestrator {
         inputs.forEach(artifact -> artifacts.get(parent.userId, parent.projectId, artifact));
         var profile = agents.require(id);
         var child = parent.child(id, new LinkedHashSet<>(inputs));
+        // 请求的语言与时长是整条链路的约束，不依赖主控在 task 里转述一次。
+        child.intentHint = parent.intentHint;
         child.emit("delegate_start", "delegate_agent", "RUNNING", "进入" + profile.title(), Map.of("input_artifact_ids", inputs));
         String text = loop.run(profile, task, List.<ModelMessage>of(), child, ignored -> { });
         child.assertActive();

@@ -166,12 +166,23 @@ class AudioSourceServiceTest {
     }
 
     @Test void chunkBoundaryNeverSplitsASupplementaryCharacter() {
-        String original = "甲".repeat(259) + "😀" + "乙";
+        // 篇幅预算按语言密度换算，切点不再固定落在第 259 个字符；断言改为真正的不变量：
+        // 任何一段都不能以高位代理结尾、也不能以低位代理开头，且逐段拼回必须与原文完全一致。
+        String original = "甲".repeat(259) + "😀" + "乙".repeat(341);
         when(index.documents(9)).thenReturn(List.of(document("短文", original)));
-        var first = service.resolve(7, 9, "朗读", null, Map.of(), 1);
-        assertThat(first.context()).containsEntry("source_end", 259);
-        var rest = service.resolve(7, 9, "继续读", null, first.context(), 1);
-        assertThat(first.text() + rest.text()).isEqualTo(original);
+        StringBuilder reassembled = new StringBuilder();
+        Map<String, Object> context = Map.of();
+        String message = "朗读";
+        for (int guard = 0; guard < 40; guard++) {
+            var chunk = service.resolve(7, 9, message, null, context, 1);
+            assertThat(Character.isHighSurrogate(chunk.text().charAt(chunk.text().length() - 1))).isFalse();
+            assertThat(Character.isLowSurrogate(chunk.text().charAt(0))).isFalse();
+            reassembled.append(chunk.text());
+            context = chunk.context();
+            message = "继续读";
+            if (context.get("source_end").equals(context.get("source_total"))) break;
+        }
+        assertThat(reassembled.toString()).isEqualTo(original);
     }
 
     private KnowledgeIndexDocument document(String title, String text) {

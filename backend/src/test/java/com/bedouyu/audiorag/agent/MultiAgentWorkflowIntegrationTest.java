@@ -80,6 +80,8 @@ class MultiAgentWorkflowIntegrationTest {
         assertThat(outputs).extracting(a -> a.get("kind")).containsExactlyInAnyOrder(
                 "LEARNING_PLAN", "RESEARCH_REPORT", "SCRIPT_DRAFT", "REVIEW_REPORT");
         assertThat((Map<String, Object>) result.get("stats")).containsEntry("delegations", 4);
+        // 服务端解析出的语言/时长提示必须真的送到模型，而不是只存在于代码里。
+        assertThat(json.writeValueAsString(model.requests)).contains("服务端确定性解析");
         model.requests.stream().filter(request -> !String.valueOf(request.get(0).get("content")).contains("AGENT_ID=supervisor"))
                 .forEach(request -> assertThat(json.writeValueAsString(request)).doesNotContain("私有旧问题", "私有旧回答"));
         verify(speech, never()).synthesize(anyString(), anyString(), any());

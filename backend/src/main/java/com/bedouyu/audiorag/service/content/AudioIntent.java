@@ -1,8 +1,11 @@
 package com.bedouyu.audiorag.service.content;
 
+import com.bedouyu.audiorag.common.SpeechTiming;
+
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Locale;
+import java.util.OptionalInt;
 import java.util.regex.Pattern;
 
 /** Small deterministic hints; the complete instruction remains the model's contract. */
@@ -71,6 +74,51 @@ public record AudioIntent(String instruction, String language, int durationMinut
     public String timeScope() { return fromDate + " 至 " + throughDate + "（北京时间，检索截至 " + asOfDate + "）"; }
     public String languageLabel() { return switch (language) { case "en" -> "English"; case "bilingual" -> "中英双语"; default -> "中文"; }; }
     public String searchQuery() { return instruction + " after:" + fromDate.minusDays(1) + " before:" + throughDate.plusDays(1); }
+
+    /** 用户是否显式写了时长；没写时不要拿默认值去要求模型。 */
+    public static OptionalInt explicitMinutes(String text) {
+        if (text == null || text.isBlank()) return OptionalInt.empty();
+        var numeric = MINUTES.matcher(text);
+        if (numeric.find()) return OptionalInt.of(Integer.parseInt(numeric.group(1)));
+        var chinese = CHINESE_MINUTES.matcher(text);
+        if (chinese.find()) return OptionalInt.of(chineseNumber(chinese.group(1)));
+        if (text.contains("半小时")) return OptionalInt.of(30);
+        if (text.contains("一小时")) return OptionalInt.of(60);
+        return OptionalInt.empty();
+    }
+
+    /** 应写篇幅：按目标语言自身的语速换算，英文不能沿用中文的字符口径。 */
+    public String lengthHint() {
+        return switch (language) {
+            case "en" -> "约 " + Math.round(durationMinutes * SpeechTiming.LATIN_WORDS_PER_MINUTE) + " 个英文单词";
+            case "bilingual" -> "中文约 " + perMinute(130) + " 字 + 英文约 " + perMinute(75) + " 词";
+            default -> "约 " + Math.round(durationMinutes * SpeechTiming.CJK_CHARACTERS_PER_MINUTE) + " 个汉字";
+        };
+    }
+
+    /** 注入主控的服务端解析提示：只陈述事实与硬约束，不替用户改变要求。 */
+    public String agentHint() {
+        boolean explicit = explicitMinutes(instruction).isPresent();
+        StringBuilder hint = new StringBuilder("服务端确定性解析（供参考，用户原话与后续更正优先）：语言=")
+                .append(languageLabel());
+        if (explicit) {
+            hint.append("；目标时长≈").append(durationMinutes).append(" 分钟，正文应").append(lengthHint());
+        } else {
+            // 用户没写时长时不能把服务端默认值伪装成要求，否则会缩窄结果。
+            hint.append("；用户没有指定时长，篇幅按内容需要决定（服务端默认约 ").append(durationMinutes).append(" 分钟，不是硬要求）");
+        }
+        hint.append("；需要本次实时证据=").append(freshEvidenceRequired ? "是" : "否")
+                .append("；创作类=").append(creative ? "是" : "否")
+                .append("；逐字原文=").append(exactSourceRequested ? "是" : "否");
+        if (freshEvidenceRequired) hint.append("；可核对日期范围=").append(timeScope());
+        hint.append(explicit
+                ? "。语言与时长是硬约束：交付正文前用 estimate_duration 以 target_minutes=" + durationMinutes
+                        + " 核对，偏差超过 20% 先自行调整再交付。"
+                : "。语言是硬约束；用户没有要求时长，不要为凑时长删减必要内容。");
+        return hint.toString();
+    }
+
+    private long perMinute(double charactersPerMinute) { return Math.round(durationMinutes * charactersPerMinute); }
 
     private static boolean matches(String text, String expression) { return Pattern.compile(expression).matcher(text).find(); }
     private static String language(String text, boolean creative) {

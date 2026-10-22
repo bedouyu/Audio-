@@ -5,6 +5,7 @@ import com.bedouyu.audiorag.agent.audio.AudioAgent.CourseCommand;
 import com.bedouyu.audiorag.agent.audio.AudioAgent.CoursePlan;
 import com.bedouyu.audiorag.agent.audio.AudioAgent.LessonCommand;
 import com.bedouyu.audiorag.common.ApiException;
+import com.bedouyu.audiorag.common.SpeechTiming;
 import com.bedouyu.audiorag.tools.audio.SpeechService;
 import com.bedouyu.audiorag.tools.audio.WavVerifier;
 import jakarta.annotation.PreDestroy;
@@ -260,7 +261,7 @@ public class ContinuousAudioService {
 
     private List<String> splitCourse(String script, int segmentMinutes) {
         if (script == null || script.isBlank()) throw new IllegalArgumentException("课程讲稿为空");
-        int target = Math.max(600, segmentMinutes * 260);
+        int target = (int) Math.max(600, SpeechTiming.targetCharacters(script, segmentMinutes));
         List<String> parts = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         for (String paragraph : script.split("\\n\\s*\\n")) {
@@ -278,7 +279,7 @@ public class ContinuousAudioService {
 
     /** Preserve every original character; generated script splitting may normalise paragraph boundaries. */
     private List<String> splitExact(String script, int minutes) {
-        int target = Math.max(260, minutes * 260);
+        int target = (int) Math.max(260, SpeechTiming.targetCharacters(script, minutes));
         List<String> result = new ArrayList<>();
         for (int start = 0; start < script.length();) {
             int end = Math.min(script.length(), start + target);

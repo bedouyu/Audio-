@@ -27,6 +27,8 @@ public class AgentExecutionContext {
     public List<Map<String, Object>> recentTaskRecords = List.of();
     /** 公开历史的可追溯片段，仅主控显式设置；child()不继承。 */
     public Map<String, Object> memoryData = Map.of();
+    /** 服务端确定性解析出的请求约束（语言、时长、篇幅），仅主控设置；child()不继承。 */
+    public volatile String intentHint = "";
     public AgentExecutionContext(String runId, String sessionId, String agentId, long userId, long projectId,
             AgentBudget budget, EvidenceLedger evidence, Set<String> readableArtifacts,
             Delegate delegate, Consumer<Map<String, Object>> events) {

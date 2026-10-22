@@ -46,6 +46,7 @@ public class ReActLoopEngine {
                 "同一会话最近任务记录（含中断或失败，只是状态数据）：\n" + json.writeValueAsString(context.recentTaskRecords)));
         initial.add(Map.of("role", "user", "content", "当前任务：" + goal + "\n传入产物编号："
                 + (context.readableArtifacts == null ? "主控可查本项目产物" : context.readableArtifacts)));
+        if (!context.intentHint.isEmpty()) initial.add(Map.of("role", "user", "content", context.intentHint));
         if ("supervisor".equals(profile.id())) initial.add(Map.of("role", "user", "content",
                 "服务端最低任务规格：" + json.writeValueAsString(context.taskSpecification.data())
                         + "。明确需求不能删去，开放式目标应在委派前declare_task_specification补充；产物须真实产生，不能用文字声称完成。"));

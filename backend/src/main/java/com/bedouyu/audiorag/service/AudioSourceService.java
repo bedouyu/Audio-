@@ -1,6 +1,7 @@
 package com.bedouyu.audiorag.service;
 
 import com.bedouyu.audiorag.common.ApiException;
+import com.bedouyu.audiorag.common.SpeechTiming;
 import com.bedouyu.audiorag.model.entity.KnowledgeIndexDocument;
 import com.bedouyu.audiorag.rag.index.KnowledgeIndexStore;
 import com.bedouyu.audiorag.repository.AudioRagRepository;
@@ -73,7 +74,7 @@ public class AudioSourceService {
         }
         if (start >= text.length()) throw badRequest("这份资料已经朗读完毕，可以指定章节重新收听或选择其他资料");
 
-        long budget = (long) (targetMinutes > 0 ? targetMinutes : 5) * 260L;
+        long budget = SpeechTiming.targetCharacters(text, targetMinutes > 0 ? targetMinutes : 5);
         int maximum = (int) Math.min(MAX_CHARACTERS, Math.max(1L, budget));
         int end = (int) Math.min(text.length(), (long) start + maximum);
         for (Chapter chapter : chapters) {
