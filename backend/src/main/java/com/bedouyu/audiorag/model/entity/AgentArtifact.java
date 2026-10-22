@@ -35,6 +35,8 @@ public class AgentArtifact {
     public void resetSynthesisAttempt() { status = "DRAFT"; audioId = null; audioUrl = null; }
     /** 同一任务内的后续修订取代这份草稿；被取代的产物不能再合成或应用。 */
     public void supersede() { status = "SUPERSEDED"; }
+    /** 草稿正文已被音频队列直接消费并合成，不再需要用户确认。 */
+    public void consume() { status = "CONSUMED"; }
     public void audit(String value) { approvalJson = value; }
     public String getId() { return id; } public String getRunId() { return runId; }
     public long getUserId() { return userId; } public long getProjectId() { return projectId; }

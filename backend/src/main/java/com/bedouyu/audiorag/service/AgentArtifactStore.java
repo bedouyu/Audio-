@@ -57,6 +57,21 @@ public class AgentArtifactStore {
         return artifacts.findByRunIdOrderByCreatedAtAsc(run).stream()
                 .filter(a -> a.getUserId() == user && a.getProjectId() == project).map(this::view).toList();
     }
+    /**
+     * 音频队列直接消费讲稿草稿并合成：草稿不再等待用户确认。
+     * 重复消费按成功处理（幂等）；已合成或待审核的产物不能被静默覆盖。
+     */
+    @Transactional
+    public Map<String, Object> consume(long user, long project, String id) {
+        var artifact = require(user, project, id, true);
+        if (!"SCRIPT_DRAFT".equals(artifact.getKind())) throw badRequest("只有课程讲稿可以被音频队列消费");
+        if ("CONSUMED".equals(artifact.getStatus())) return view(artifact);
+        if (!"DRAFT".equals(artifact.getStatus()))
+            throw conflict("讲稿状态为 " + artifact.getStatus() + "；不能按音频队列消费处理");
+        artifact.consume();
+        settleRun(artifact);
+        return view(artifact);
+    }
     @Transactional
     public Map<String, Object> beginSynthesis(long user, long project, String id) {
         return beginSynthesis(user, project, id, null, null, false, null);
@@ -66,6 +81,9 @@ public class AgentArtifactStore {
                                               String reviewId, boolean overrideReview, String overrideReason) {
         var artifact = require(user, project, id, true);
         if (!"SCRIPT_DRAFT".equals(artifact.getKind())) throw badRequest("只有课程讲稿可合成音频");
+        // 音频请求已经把这份正文消费并合成过，这里给出明确原因而不是笼统的校验失败。
+        if ("CONSUMED".equals(artifact.getStatus()))
+            throw conflict("该讲稿已被直接生成的音频消费并合成，不能再次确认合成");
         requireHash(artifact, expectedContentHash, "READY".equals(artifact.getStatus()));
         if ("READY".equals(artifact.getStatus())) return view(artifact);
         requireFinishedRun(artifact);
@@ -197,7 +215,7 @@ public class AgentArtifactStore {
         if (!"AWAITING_CONFIRMATION".equals(run.getStatus())) return;
         var outputs = artifacts.lockedForRun(current.getRunId());
         boolean pending = outputs.stream().anyMatch(a -> Set.of("SCRIPT_DRAFT", "LEARNING_PLAN").contains(a.getKind())
-                && !Set.of("READY", "APPLIED").contains(a.getStatus()));
+                && !Set.of("READY", "APPLIED", "CONSUMED").contains(a.getStatus()));
         if (!pending) {
             Map<String, Object> result = run.getResult() == null ? new LinkedHashMap<>()
                     : new LinkedHashMap<>(json.readValue(run.getResult(), Map.class));

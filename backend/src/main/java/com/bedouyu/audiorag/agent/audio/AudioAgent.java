@@ -13,6 +13,7 @@ import org.springframework.http.HttpStatus;
 import com.bedouyu.audiorag.core.loop.AudioRetrievalLoop;
 import com.bedouyu.audiorag.memory.MemoryContextService;
 import com.bedouyu.audiorag.memory.ConversationTurnLock;
+import com.bedouyu.audiorag.service.AgentArtifactStore;
 import com.bedouyu.audiorag.service.AgentRequestCoordinator;
 import com.bedouyu.audiorag.service.AgentRunStore;
 import com.bedouyu.audiorag.core.guard.TaskSpecificationResolver;
@@ -22,9 +23,11 @@ import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.bedouyu.audiorag.tools.research.WebSearchService;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
@@ -43,11 +46,13 @@ public class AudioAgent {
     private final AgentRunStore runs;
     private final TaskSpecificationResolver specifications;
     private final AgentOrchestrator orchestrator;
+    private final AgentArtifactStore artifacts;
 
     public AudioAgent(QdrantService qdrant, AudioRagRepository repository,
             WebSearchService webSearch, AiModelGateway llm, LearningPlanService learningPlan,
             AudioRetrievalLoop retrieval, MemoryContextService memory, AgentOrchestrator orchestrator, ObjectMapper json,
-            AgentRequestCoordinator requests, AgentRunStore runs, TaskSpecificationResolver specifications) {
+            AgentRequestCoordinator requests, AgentRunStore runs, TaskSpecificationResolver specifications,
+            AgentArtifactStore artifacts) {
         this.qdrant = qdrant;
         this.repository = repository;
         this.webSearch = webSearch;
@@ -58,6 +63,7 @@ public class AudioAgent {
         this.orchestrator = orchestrator;
         this.json = json;
         this.requests = requests; this.runs = runs; this.specifications = specifications;
+        this.artifacts = artifacts;
     }
 
     public Map<String, Object> chat(long userId, ChatCommand command) {
@@ -157,31 +163,52 @@ public class AudioAgent {
 
     /** 用真实多智能体产出讲稿；没有可朗读的草稿就明确失败，不退回模板或占位内容。 */
     private CoursePlan createCourseViaAgent(long userId, CourseCommand command) {
-        Map<String, Object> result;
+        Set<String> before = new HashSet<>();
+        for (var item : artifacts.list(userId, command.projectId())) before.add(String.valueOf(item.get("id")));
+        Map<String, Object> result = null;
+        RuntimeException failure = null;
         try {
+            // 音频会被直接合成并播放，所以要求连复核一起产出，不依赖主控自行决定是否复核。
             result = orchestrator.chat(userId, new ChatCommand(agentTask(command), null, command.projectId(),
-                    null, null, java.util.Set.of("SCRIPT_DRAFT")), null, ignored -> { });
+                    null, null, java.util.Set.of("SCRIPT_DRAFT", "REVIEW_REPORT"), true), null, ignored -> { });
         } catch (RuntimeException error) {
-            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "多智能体内容准备失败，未生成也未合成音频：" + (error.getMessage() == null ? "未知错误" : error.getMessage()));
+            failure = error;
         }
-        for (var item : (List<?>) result.getOrDefault("artifacts", List.of())) {
+        Map<?, ?> draft = result == null ? null
+                : draftIn((List<?>) result.getOrDefault("artifacts", List.of()), before);
+        if (draft == null) {
+            // 预算或时限中断时任务会抛错，但写稿可能已经落库；能用的草稿不该被一并丢掉。
+            draft = draftIn(artifacts.list(userId, command.projectId()), before);
+        }
+        if (draft == null) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "多智能体内容准备失败，未生成也未合成音频："
+                    + (failure == null || failure.getMessage() == null ? "没有可用讲稿" : failure.getMessage()));
+        }
+        String script = String.valueOf(draft.get("content"));
+        var citations = new ArrayList<Map<String, Object>>();
+        if (draft.get("citations") instanceof List<?> values)
+            for (var citation : values)
+                if (citation instanceof Map<?, ?> fields) {
+                    var copy = new LinkedHashMap<String, Object>();
+                    fields.forEach((key, value) -> copy.put(String.valueOf(key), value));
+                    citations.add(copy);
+                }
+        // 正文已被这次音频请求消费，草稿不该继续显示为“待确认”。
+        artifacts.consume(userId, command.projectId(), String.valueOf(draft.get("id")));
+        return new CoursePlan(title(command.topic()), script, List.copyOf(citations), 0);
+    }
+
+    /** 取本次调用中新产生、且仍是草稿的讲稿；列表按创建时间倒序，第一条即最新。 */
+    private Map<?, ?> draftIn(List<?> items, Set<String> before) {
+        for (var item : items) {
             if (!(item instanceof Map<?, ?> artifact)) continue;
             if (!"SCRIPT_DRAFT".equals(artifact.get("kind")) || !"DRAFT".equals(artifact.get("status"))) continue;
+            if (before.contains(String.valueOf(artifact.get("id")))) continue;
             String script = String.valueOf(artifact.get("content"));
             if (script.isBlank() || "null".equals(script)) continue;
-            var citations = new ArrayList<Map<String, Object>>();
-            if (artifact.get("citations") instanceof List<?> values)
-                for (var citation : values)
-                    if (citation instanceof Map<?, ?> fields) {
-                        var copy = new LinkedHashMap<String, Object>();
-                        fields.forEach((key, value) -> copy.put(String.valueOf(key), value));
-                        citations.add(copy);
-                    }
-            return new CoursePlan(title(command.topic()), script, List.copyOf(citations), 0);
+            return artifact;
         }
-        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
-                "多智能体未产出可朗读的讲稿草稿，未生成音频；请检查是否被复核拒绝或超出调用预算");
+        return null;
     }
 
     /** 把音频请求翻译成主控能执行的任务：保留用户原话，只补服务端已知的时长与受众。 */
@@ -314,9 +341,13 @@ public class AudioAgent {
     }
 
     public record ChatCommand(String message, String sessionId, long projectId, String memoryStrategy,
-                              String requestId, java.util.Set<String> requiredArtifacts) {
-        public ChatCommand(String message, String sessionId, long projectId) { this(message, sessionId, projectId, null, null, null); }
-        public ChatCommand(String message, String sessionId, long projectId, String memoryStrategy) { this(message, sessionId, projectId, memoryStrategy, null, null); }
+                              String requestId, java.util.Set<String> requiredArtifacts, boolean audioRequest) {
+        public ChatCommand(String message, String sessionId, long projectId) { this(message, sessionId, projectId, null, null, null, false); }
+        public ChatCommand(String message, String sessionId, long projectId, String memoryStrategy) { this(message, sessionId, projectId, memoryStrategy, null, null, false); }
+        public ChatCommand(String message, String sessionId, long projectId, String memoryStrategy,
+                           String requestId, java.util.Set<String> requiredArtifacts) {
+            this(message, sessionId, projectId, memoryStrategy, requestId, requiredArtifacts, false);
+        }
     }
 
     public record LessonCommand(String topic, long projectId, int durationMinutes, String audience, String voice,

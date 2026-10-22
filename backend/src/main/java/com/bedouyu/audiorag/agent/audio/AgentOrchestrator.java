@@ -70,14 +70,18 @@ public class AgentOrchestrator {
                     token == null ? ignored -> { } : token);
             runs.saveSpecification(run, context.taskSpecification.data());
             var outputs = artifacts.forRun(user, command.projectId(), run);
-            boolean awaiting = outputs.stream().anyMatch(a -> Set.of("SCRIPT_DRAFT", "LEARNING_PLAN").contains(a.get("kind"))
-                    && "DRAFT".equals(a.get("status")));
+            // 音频请求的正文随后由队列消费并合成，不属于“等你确认”的聊天产物。
+            boolean awaiting = !command.audioRequest() && outputs.stream()
+                    .anyMatch(a -> Set.of("SCRIPT_DRAFT", "LEARNING_PLAN").contains(a.get("kind"))
+                            && "DRAFT".equals(a.get("status")));
             if (awaiting) answer = "本轮有待你确认的音频产物，请在草稿页审核后执行。\n\n" + answer;
             context.assertActive();
             runs.assertCurrentInstanceLease();
-            repository.appendTurn(session, command.message(), answer);
-            repository.addProjectRecord(command.projectId(), "chat", "多 Agent 任务", answer,
-                    Map.of("session_id", session, "run_id", run, "citations", evidence.citations().size()));
+            if (!command.audioRequest()) {
+                repository.appendTurn(session, command.message(), answer);
+                repository.addProjectRecord(command.projectId(), "chat", "多 Agent 任务", answer,
+                        Map.of("session_id", session, "run_id", run, "citations", evidence.citations().size()));
+            }
             String status = awaiting ? "AWAITING_CONFIRMATION" : "SUCCEEDED";
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("session_id", session); result.put("run_id", run); result.put("answer", answer);

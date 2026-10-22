@@ -27,7 +27,8 @@ class AudioContentGenerationTest {
     private final AudioRetrievalLoop retrieval = mock(AudioRetrievalLoop.class);
     private final AudioAgent agent = new AudioAgent(mock(QdrantService.class), repository, web, model, learning,
             retrieval, mock(MemoryContextService.class), mock(AgentOrchestrator.class), new ObjectMapper(),
-            mock(AgentRequestCoordinator.class), mock(AgentRunStore.class), new TaskSpecificationResolver());
+            mock(AgentRequestCoordinator.class), mock(AgentRunStore.class), new TaskSpecificationResolver(),
+            mock(com.bedouyu.audiorag.service.AgentArtifactStore.class));
 
     AudioContentGenerationTest() { when(repository.ownsProject(1, 2)).thenReturn(true); }
 

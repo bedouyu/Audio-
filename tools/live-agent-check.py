@@ -148,6 +148,7 @@ def run_audio_case(token, minutes, instruction, label):
     elapsed = time.time() - started
     artifacts = get_json(f"/api/v1/projects/{project_id}/agent/artifacts", token)["artifacts"]
     kinds = sorted({item["kind"] for item in artifacts})
+    draft_statuses = [item["status"] for item in artifacts if item["kind"] == "SCRIPT_DRAFT"]
     lessons = snapshot.get("lessons") or []
     script = lessons[0].get("script", "") if lessons else ""
     if not script:
@@ -169,7 +170,10 @@ def run_audio_case(token, minutes, instruction, label):
         "deviation_percent": round(deviation * 100, 1),
         "old_260_rule_minutes": round(old_seconds / 60, 2),
         "agent_artifacts": kinds,
+        "draft_statuses": draft_statuses,
         "used_agent": "SCRIPT_DRAFT" in kinds,
+        # 列表按创建时间倒序：最新一份被消费即可，旧稿保留了 SUPERSEDED 历史。
+        "draft_consumed": bool(draft_statuses) and draft_statuses[0] == "CONSUMED",
         "errors": snapshot.get("errors"),
     }, ensure_ascii=False, indent=2))
     return {"label": label, "minutes": minutes, "deviation": deviation}
