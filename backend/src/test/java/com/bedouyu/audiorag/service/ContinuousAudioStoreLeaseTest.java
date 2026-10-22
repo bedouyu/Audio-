@@ -80,6 +80,7 @@ class ContinuousAudioStoreLeaseTest {
         queue.prepared("Topic", "[]", 0);
         String script = "A short script.";
         var segment = new ContinuousAudioSegment(id, 1, script, Hashing.sha256(script), UUID.randomUUID().toString());
+        when(queues.findById(id)).thenReturn(Optional.of(queue));
         when(queues.findLockedById(id)).thenReturn(Optional.of(queue));
         when(projects.existsByIdAndUserId(7, 1)).thenReturn(true);
         when(segments.findByQueueIdOrderBySegmentNumberAsc(id)).thenReturn(List.of(segment));

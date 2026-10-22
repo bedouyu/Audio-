@@ -1,6 +1,7 @@
 server:
   port: ${SERVER_PORT:18081}
   address: ${SERVER_ADDRESS:127.0.0.1}
+  shutdown: graceful
 
 spring:
   application:
@@ -11,6 +12,11 @@ spring:
     url: ${AUDIORAG_MYSQL_URL:${DOCPILOT_MYSQL_URL:jdbc:mysql://127.0.0.1:3306/docpilot?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}}
     username: ${AUDIORAG_MYSQL_USER:${DOCPILOT_MYSQL_USER:}}
     password: ${AUDIORAG_MYSQL_PASSWORD:${DOCPILOT_MYSQL_PASSWORD:}}
+    hikari:
+      # 轮询、进度上报与生成任务共用连接池；显式写出来便于按机器调整。
+      maximum-pool-size: ${AUDIORAG_DB_POOL_SIZE:10}
+      connection-timeout: ${AUDIORAG_DB_CONNECT_TIMEOUT_MS:5000}
+      validation-timeout: ${AUDIORAG_DB_VALIDATION_TIMEOUT_MS:2000}
   jpa:
     open-in-view: false
     hibernate:
@@ -26,6 +32,8 @@ spring:
     multipart:
       max-file-size: 100MB
       max-request-size: 100MB
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
 
 management:
   endpoints:
@@ -46,6 +54,11 @@ audiorag:
     node-heartbeat-ms: ${AUDIORAG_NODE_HEARTBEAT_MS:10000}
     node-lease-ms: ${AUDIORAG_NODE_LEASE_MS:90000}
     thinking-enabled: ${AUDIORAG_AGENT_THINKING_ENABLED:false}
+  stream:
+    # 有界：排队满时立即回错误，不无限堆积阻塞的模型调用。
+    workers: ${AUDIORAG_STREAM_WORKERS:4}
+    queue-capacity: ${AUDIORAG_STREAM_QUEUE_CAPACITY:24}
+    timeout-ms: ${AUDIORAG_STREAM_TIMEOUT_MS:900000}
   embedding-model-dir: ${AUDIORAG_EMBEDDING_MODEL_DIR:D:/AI-Toolchain/models/bge-small-zh-v1.5}
   rag:
     bm25-cache-entries: ${AUDIORAG_BM25_CACHE_ENTRIES:16}

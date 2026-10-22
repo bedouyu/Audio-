@@ -18,6 +18,7 @@ export function useWorkspace() {
     backend: "http://127.0.0.1:18081",
     busy: false,
   });
+  let projectLoad = null;
   async function api(path, method = "GET", body = null) {
     return window.audioAgent.request({
       path,
@@ -32,6 +33,16 @@ export function useWorkspace() {
   async function refreshProject() {
     if (!state.project) return;
     const id = state.project.id;
+    // 单飞：轮询、切空间与聊天结束可能同时触发刷新，同一空间只保留一次在途请求，
+    // 避免同一份 7 个接口的快照被并发拉取多遍。
+    if (projectLoad && projectLoad.id === id) return projectLoad.promise;
+    const promise = loadProject(id).finally(() => {
+      if (projectLoad && projectLoad.promise === promise) projectLoad = null;
+    });
+    projectLoad = { id, promise };
+    return promise;
+  }
+  async function loadProject(id) {
     const results = await Promise.all([
       api("/api/v1/projects/" + id + "/knowledge"),
       api("/api/v1/projects/" + id + "/records"),

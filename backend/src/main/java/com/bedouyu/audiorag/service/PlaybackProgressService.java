@@ -17,7 +17,7 @@ public class PlaybackProgressService {
         this.queues = queues; this.progress = progress;
     }
     public Map<String, Object> get(long userId, String queueId) {
-        queues.status(userId, queueId); // The queue ownership check always precedes access to progress.
+        queues.requireOwned(userId, queueId); // The queue ownership check always precedes access to progress.
         return progress.findById(queueId).map(this::data).orElseGet(() -> Map.of(
                 "queue_id", queueId, "segment_index", 0, "position_seconds", 0.0,
                 "playback_rate", 1.0, "completed", false, "updated_at", ""));
@@ -26,21 +26,14 @@ public class PlaybackProgressService {
         if (index < 0 || !Double.isFinite(seconds) || seconds < 0 || seconds > 86400
                 || !Double.isFinite(rate) || rate < 0.5 || rate > 3)
             throw new ApiException(HttpStatus.BAD_REQUEST, "收听位置或播放速度无效");
-        var queue = queues.status(userId, queueId);
-        int total = ((Number) queue.get("total_segments")).intValue();
-        var states = (List<?>) queue.get("segments");
-        if (index >= total || states == null || states.stream().noneMatch(s -> s instanceof Map<?, ?> m
-                && ((Number) m.get("segment_number")).intValue() == index + 1 && "READY".equals(m.get("status"))))
-            throw new ApiException(HttpStatus.CONFLICT, "该音频片段尚不可播放");
-        if (completed && (index != total - 1 || !"COMPLETE".equals(queue.get("status"))))
-            throw new ApiException(HttpStatus.CONFLICT, "只有最后一个音频片段可以记为听完");
-        var entry = progress.findById(queueId).orElseGet(() -> new PlaybackProgress(queueId, userId,
-                ((Number) queue.get("project_id")).longValue()));
+        // 只校验目标片段与片段总数，不再为每 5 秒一次的写入渲染整份队列快照。
+        long projectId = queues.requirePlaybackTarget(userId, queueId, index, completed);
+        var entry = progress.findById(queueId).orElseGet(() -> new PlaybackProgress(queueId, userId, projectId));
         entry.update(index, seconds, rate, completed);
         return data(progress.save(entry));
     }
     public boolean completed(long userId, String queueId) {
-        queues.commandForUser(userId, queueId);
+        queues.requireOwned(userId, queueId);
         return progress.findById(queueId).map(PlaybackProgress::isCompleted).orElse(false);
     }
     private Map<String, Object> data(PlaybackProgress value) {

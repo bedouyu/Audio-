@@ -121,7 +121,6 @@ async function send() {
         messages.value[index].taskStatus === "AWAITING_CONFIRMATION"
           ? "产物已保存，请在 Agent 产物中审核。"
           : "回答已保存。";
-      await refreshProject();
     }
   } catch (error) {
     if (mounted) status.value = error.message;

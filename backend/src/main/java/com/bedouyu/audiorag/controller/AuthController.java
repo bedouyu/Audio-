@@ -37,4 +37,10 @@ public class AuthController {
         return authService.requireUser(authorization);
     }
 
+    /** 注销并删除当前令牌；重复调用返回同样的结果，客户端无需区分。 */
+    @PostMapping("/auth/logout")
+    public Map<String, Object> logout(@RequestHeader(value = "Authorization", required = false) String authorization) {
+        return authService.logout(authorization);
+    }
+
 }

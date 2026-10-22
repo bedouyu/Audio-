@@ -1,7 +1,7 @@
 ﻿$ErrorActionPreference = 'Stop'
 $audioRoot = $PSScriptRoot
-$nodeExe = 'D:\DevTools\nodejs\node.exe'
-if (-not (Test-Path -LiteralPath $nodeExe)) { $nodeExe = (Get-Command node -ErrorAction Stop).Source }
+. (Join-Path $audioRoot 'scripts\Resolve-Toolchain.ps1')
+$nodeExe = Get-NodeExecutable
 $nodeRoot = Split-Path -Parent $nodeExe
 $env:Path = "$nodeRoot;$env:Path"
 $npmExe = Join-Path $nodeRoot 'npm.cmd'

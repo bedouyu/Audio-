@@ -1,6 +1,7 @@
 package com.bedouyu.audiorag.repository;
 
 import com.bedouyu.audiorag.common.Hashing;
+import com.bedouyu.audiorag.common.PasswordHasher;
 import com.bedouyu.audiorag.common.ApiException;
 import com.bedouyu.audiorag.mapper.AudioApiMapper;
 import com.bedouyu.audiorag.model.entity.*;
@@ -8,6 +9,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.*;
 
 /** 数据访问门面：业务层不写 SQL，原接口格式由 mapper 保持兼容。 */
@@ -24,6 +27,8 @@ public class AudioRagRepository {
     private final LearningPointRepository points;
     private final AudioApiMapper mapper;
     private final SecureRandom random = new SecureRandom();
+    /** 登录令牌有效期；过期即失效，也可通过 /auth/logout 主动注销。 */
+    private static final Duration TOKEN_LIFETIME = Duration.ofDays(30);
 
     public AudioRagRepository(UserAccountRepository users, AuthTokenRepository tokens,
             LearningProjectRepository projects, ChatSessionRepository sessions,
@@ -35,23 +40,43 @@ public class AudioRagRepository {
     }
 
     public Map<String, Object> createUser(String username, String password) {
-        return mapper.user(users.saveAndFlush(new UserAccount(username, Hashing.sha256(password))));
+        return mapper.user(users.saveAndFlush(new UserAccount(username, PasswordHasher.hash(password))));
     }
-    @Transactional(readOnly = true)
+    /** 校验通过后把历史无盐口令就地升级为 PBKDF2，存量用户无需重置密码。 */
     public Optional<Map<String, Object>> authenticate(String username, String password) {
-        return users.findByUsernameAndPasswordHash(username, Hashing.sha256(password)).map(mapper::user);
+        return users.findByUsername(username)
+                .filter(user -> PasswordHasher.verify(password, user.getPasswordHash()))
+                .map(user -> {
+                    if (PasswordHasher.needsUpgrade(user.getPasswordHash())) {
+                        user.updatePasswordHash(PasswordHasher.hash(password));
+                        users.save(user);
+                    }
+                    return mapper.user(user);
+                });
     }
     public String issueToken(long userId) {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        tokens.save(new AuthToken(Hashing.sha256(token), userId));
+        tokens.save(new AuthToken(Hashing.sha256(token), userId, LocalDateTime.now().plus(TOKEN_LIFETIME)));
         return token;
     }
     @Transactional(readOnly = true)
     public Optional<Map<String, Object>> userForToken(String token) {
+        if (token == null || token.isBlank()) {
+            return Optional.empty();
+        }
+        LocalDateTime now = LocalDateTime.now();
         return tokens.findById(Hashing.sha256(token))
+                .filter(value -> !value.isExpired(now))
                 .flatMap(value -> users.findById(value.getUserId())).map(mapper::user);
+    }
+    /** 注销：删除该令牌；未知或已失效的令牌同样静默成功。 */
+    public void revokeToken(String token) {
+        if (token == null || token.isBlank()) {
+            return;
+        }
+        tokens.findById(Hashing.sha256(token)).ifPresent(tokens::delete);
     }
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listProjects(long userId) {

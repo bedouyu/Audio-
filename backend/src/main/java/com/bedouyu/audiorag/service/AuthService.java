@@ -43,6 +43,14 @@ public class AuthService {
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "登录已失效，请重新登录"));
     }
 
+    /** 注销当前令牌。不带 Authorization 或令牌已失效时同样视为成功，便于客户端重试。 */
+    public Map<String, Object> logout(String authorization) {
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            repository.revokeToken(authorization.substring(7).trim());
+        }
+        return Map.of("loggedOut", true);
+    }
+
     private Map<String, Object> authenticatedResponse(Map<String, Object> user) {
         long userId = ((Number) user.get("id")).longValue();
         return Map.of("token", repository.issueToken(userId), "user", user);

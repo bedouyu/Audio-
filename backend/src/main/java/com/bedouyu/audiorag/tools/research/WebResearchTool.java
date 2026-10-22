@@ -29,7 +29,9 @@ public class WebResearchTool implements FunctionTool {
         LocalDate through = date(args, "through_date", intent.throughDate());
         if (through.isBefore(from) || through.isAfter(intent.asOfDate())) throw new IllegalArgumentException("新闻检索日期范围无效或包含未来日期");
         int limit = Math.max(1, Math.min(6, args.path("limit").asInt(4)));
-        var hits = fresh ? web.searchFresh(query + " after:" + from.minusDays(1) + " before:" + through.plusDays(1), limit, from, through)
+        // RSS 搜索不支持 after:/before: 日期操作符，日期范围由 searchFresh 按发布日过滤；
+        // 这里若再拼上去只会被 newsQuery 的正则剥掉，纯属无效文本。
+        var hits = fresh ? web.searchFresh(query, limit, from, through)
                 : web.search(query, limit);
         context.assertActive();
         var evidence = context.evidence.register(hits);

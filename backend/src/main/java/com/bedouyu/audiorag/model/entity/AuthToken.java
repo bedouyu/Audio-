@@ -16,15 +16,28 @@ public class AuthToken {
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
+    /**
+     * 过期时间。旧版本签发的令牌没有该列值，一律按已过期处理（升级后需重新登录一次），
+     * 避免历史令牌永久有效。
+     */
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
+
     protected AuthToken() { }
 
-    public AuthToken(String tokenHash, long userId) {
+    public AuthToken(String tokenHash, long userId, LocalDateTime expiresAt) {
         this.tokenHash = tokenHash;
         this.userId = userId;
-        createdAt = LocalDateTime.now();
+        this.createdAt = LocalDateTime.now();
+        this.expiresAt = expiresAt;
     }
 
     public String getTokenHash() { return tokenHash; }
     public long getUserId() { return userId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
+    public LocalDateTime getExpiresAt() { return expiresAt; }
+
+    public boolean isExpired(LocalDateTime now) {
+        return expiresAt == null || !expiresAt.isAfter(now);
+    }
 }

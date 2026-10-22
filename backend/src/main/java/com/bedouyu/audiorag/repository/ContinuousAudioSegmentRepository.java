@@ -5,4 +5,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ContinuousAudioSegmentRepository extends JpaRepository<ContinuousAudioSegment, Long> {
     List<ContinuousAudioSegment> findByQueueIdOrderBySegmentNumberAsc(String queueId);
     Optional<ContinuousAudioSegment> findByQueueIdAndSegmentNumber(String queueId, int segmentNumber);
+    long countByQueueId(String queueId);
 }

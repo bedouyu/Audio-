@@ -21,6 +21,8 @@ export function useAudioCenter(workspace) {
   let wantsPlay = false;
   let pending = null;
   let lastSave = 0;
+  let lastRefillAttempt = 0;
+  let refillInterval = 15000;
   let lastProgressAt = 0;
   let lastProgressQueue = null;
   let progressChain = Promise.resolve();
@@ -248,7 +250,16 @@ export function useAudioCenter(workspace) {
   function timeUpdate() {
     state.time = player?.currentTime || 0;
     if (Date.now() - lastSave > 1500) { save(); lastSave = Date.now(); }
-    if (player?.duration - player?.currentTime < 15) refill();
+    maybeRefill();
+  }
+  // 片尾 15 秒内只按节流节奏补段；失败后指数退避，避免每个 timeupdate 都发一次请求。
+  function maybeRefill() {
+    if (state.refilling || !state.queue?.queue_id) return;
+    const remaining = (player?.duration || 0) - (player?.currentTime || 0);
+    if (!Number.isFinite(remaining) || remaining >= 15) return;
+    if (Date.now() - lastRefillAttempt < refillInterval) return;
+    lastRefillAttempt = Date.now();
+    refill();
   }
   function playChanged(playing) { state.playing = playing; if (!playing) save(true); }
   function setSpeed(value) {
@@ -257,21 +268,28 @@ export function useAudioCenter(workspace) {
     save(true);
   }
   async function refill(manual = false) {
-    if (state.refilling || !state.queue?.queue_id || !canRefill(state.queue, manual)) return;
+    if (state.refilling || !state.queue?.queue_id || !canRefill(state.queue, manual)) return false;
     const version = revision, id = state.queue.queue_id;
     state.refilling = true;
     try {
       const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/refill", "POST", {});
-      if (version !== revision) return;
+      if (version !== revision) return false;
       state.queue = result; state.error = ""; startPolling(); save();
       updateHistory(result);
-    } catch (error) { if (version === revision) state.error = error.message; }
+      refillInterval = 15000;
+      return true;
+    } catch (error) {
+      if (version === revision) state.error = error.message;
+      refillInterval = Math.min(refillInterval * 2, 120000);
+      return false;
+    }
     finally { if (version === revision) state.refilling = false; }
   }
   async function select(index, play = true) {
     if (index < 0 || index >= total.value) return;
     save(true);
     player?.pause(); state.index = index; state.time = 0; state.completed = false; restoredTime = 0; wantsPlay = play;
+    refillInterval = 15000; lastRefillAttempt = 0;
     save(true); await nextTick(); await attemptPlay();
   }
   async function next() {
@@ -305,6 +323,7 @@ export function useAudioCenter(workspace) {
       || { id: queue.project_id, title: queue.title || "音频内容", topic: queue.instruction || "" };
     state.instruction = queue.instruction || ""; state.index = 0; state.time = 0;
     state.error = ""; state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = false;
+    refillInterval = 15000; lastRefillAttempt = 0;
     state.restoring = true; updateHistory(queue);
     let fallback = null;
     try {

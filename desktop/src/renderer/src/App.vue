@@ -94,8 +94,17 @@ async function open(project) {
   await safe(() => openProject(project));
   audio.resumeLegacyProject(project);
 }
-function logout() {
+async function logout() {
+  const token = state.token;
   audio.save(true);
+  // 先趁令牌还有效时通知服务端删除它；后端不可用也不阻断本地退出。
+  if (token) {
+    try {
+      await api("/api/v1/auth/logout", "POST");
+    } catch {
+      /* 离线退出：本地清空即可 */
+    }
+  }
   audio.clear();
   state.user = null;
   state.project = null;
@@ -111,19 +120,22 @@ async function loadTrace(record) {
 }
 onMounted(async () => {
   state.backend = (await window.audioAgent.info()).backend;
+  let backendUp = false;
   try {
     health.value = await api("/api/health");
     state.agentRuntime =
       health.value.generation?.agent_runtime || "offline-retrieval";
+    backendUp = true;
   } catch {
     state.notice = "请先启动 Java 后端：" + state.backend;
   }
-  if (state.token) {
+  // 后端没起来时不要拿 /me 的失败当"登录失效"，否则每次先开桌面端都会丢掉已保存的令牌。
+  if (state.token && backendUp) {
     await safe(async () => {
       try {
         state.user = await api("/api/v1/me");
       } catch {
-        logout();
+        await logout();
         return;
       }
       await refreshProjects();

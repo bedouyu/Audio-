@@ -8,9 +8,8 @@ if ($env:AUDIORAG_SPEECH_PROVIDER -eq 'cosyvoice') {
     if (-not $env:AUDIORAG_SYNTHESIS_LEASE_SECONDS) { $env:AUDIORAG_SYNTHESIS_LEASE_SECONDS = '1500' }
     & (Join-Path $audioRoot 'ensure-cosyvoice-local.ps1')
 }
-$javaCandidates = @('D:\AI-Toolchain\jdk-17.0.20.1+1', 'D:\DevTools\jdk-17')
-$javaRoot = $javaCandidates | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'bin\java.exe') } | Select-Object -First 1
-if (-not $javaRoot) { throw 'JDK 17 was not found. Set JAVA_HOME to your JDK 17 directory.' }
+. (Join-Path $audioRoot 'scripts\Resolve-Toolchain.ps1')
+$javaRoot = Get-JavaHome
 $env:JAVA_HOME = $javaRoot
 $env:Path = "$javaRoot\bin;$env:Path"
 foreach ($audioVariable in @('DEEPSEEK_API_KEY','AUDIORAG_LLM_API_KEY','AUDIORAG_MYSQL_USER','AUDIORAG_MYSQL_PASSWORD','DOCPILOT_MINIO_ACCESS_KEY','DOCPILOT_MINIO_SECRET_KEY')) {
@@ -20,8 +19,7 @@ foreach ($audioVariable in @('DEEPSEEK_API_KEY','AUDIORAG_LLM_API_KEY','AUDIORAG
     }
 }
 Set-Location -LiteralPath (Join-Path $audioRoot 'backend')
-$mavenExe = 'D:\DevTools\apache-maven-3.9.16\bin\mvn.cmd'
-if (-not (Test-Path -LiteralPath $mavenExe)) { $mavenExe = (Get-Command mvn -ErrorAction Stop).Source }
+$mavenExe = Get-MavenExecutable
 $audioRepo = Join-Path $audioRoot '.cache\m2'
 Write-Host 'Building Audio智能助手 Java 17 backend...' -ForegroundColor Green
 & $mavenExe "-Dmaven.repo.local=$audioRepo" -DskipTests package

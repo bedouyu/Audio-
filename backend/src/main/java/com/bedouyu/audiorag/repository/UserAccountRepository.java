@@ -11,5 +11,4 @@ public interface UserAccountRepository extends JpaRepository<UserAccount, Long> 
     @Query("select u from UserAccount u where u.id = :id")
     Optional<UserAccount> findLockedById(@Param("id") long id);
     Optional<UserAccount> findByUsername(String username);
-    Optional<UserAccount> findByUsernameAndPasswordHash(String username, String passwordHash);
 }

@@ -204,12 +204,43 @@ public class ContinuousAudioStore {
     }
 
     public Optional<Map<String, Object>> statusIfPresent(long userId, String queueId) {
-        var found = queues.findLockedById(queueId);
-        if (found.isEmpty()) return Optional.empty();
-        var queue = found.get();
+        var current = queues.findById(queueId).orElse(null);
+        if (current == null) return Optional.empty();
+        if (current.getUserId() != userId || !projects.existsByIdAndUserId(current.getProjectId(), userId)) throw notFound();
+        // 轮询是纯读：租约仍在有效期内时没有需要纠正的状态，不取行锁，避免与生成任务争同一条队列行。
+        if (current.getLeaseUntil() != null && current.getLeaseUntil().isAfter(Instant.now())) {
+            return Optional.of(snapshot(current));
+        }
+        var locked = queues.findLockedById(queueId).orElseThrow(ContinuousAudioStore::notFound);
+        reconcile(locked);
+        return Optional.of(snapshot(locked));
+    }
+
+    /** 归属校验的廉价版本：不渲染快照，也不纠正租约状态。 */
+    @Transactional(readOnly = true)
+    public void requireOwned(long userId, String queueId) {
+        var queue = queues.findById(queueId).orElseThrow(ContinuousAudioStore::notFound);
         if (queue.getUserId() != userId || !projects.existsByIdAndUserId(queue.getProjectId(), userId)) throw notFound();
-        reconcile(queue);
-        return Optional.of(snapshot(queue));
+    }
+
+    /**
+     * 保存收听进度前的校验：只取目标片段与片段总数，不再为一次 5 秒一次的写入重建整份队列快照。
+     */
+    @Transactional(readOnly = true)
+    public long requirePlaybackTarget(long userId, String queueId, int index, boolean completed) {
+        var queue = queues.findById(queueId).orElseThrow(ContinuousAudioStore::notFound);
+        if (queue.getUserId() != userId || !projects.existsByIdAndUserId(queue.getProjectId(), userId)) throw notFound();
+        var target = segments.findByQueueIdAndSegmentNumber(queueId, index + 1).orElse(null);
+        if (target == null || !"READY".equals(target.getStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "该音频片段尚不可播放");
+        }
+        if (completed) {
+            long total = segments.countByQueueId(queueId);
+            if (index != total - 1 || !"COMPLETE".equals(queue.getStatus())) {
+                throw new ApiException(HttpStatus.CONFLICT, "只有最后一个音频片段可以记为听完");
+            }
+        }
+        return queue.getProjectId();
     }
 
     public Map<String, Object> status(long userId, String queueId) {
