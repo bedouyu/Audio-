@@ -417,6 +417,8 @@ class AgentPersistenceConsistencyTest {
     private Map<String, Object> review(Fixture f, Map<String, Object> script, String target, String hash, boolean approved) {
         return artifacts.save(f.run, f.user, f.project, "review_agent", "REVIEW_REPORT",
                 json.writeValueAsString(Map.of("reviewed_artifact_id", target, "content_hash", hash,
+                        "checks", Map.of("topic", true, "genre", true, "language", true, "ending", true,
+                                "length", true, "citations", true, "readable", true),
                         "approved", approved, "issues", List.of(), "reason", "人工测试审核报告")), List.of(id(script)), List.of());
     }
     private void finish(Fixture f) {

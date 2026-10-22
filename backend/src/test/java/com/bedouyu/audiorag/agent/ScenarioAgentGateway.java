@@ -61,7 +61,10 @@ public class ScenarioAgentGateway implements AgentModelGateway {
                 return call("validate_script", Map.of("artifact_id", target.path("artifact_id").asText(),
                         "content_hash", target.path("content_hash").asText()));
             return finish(json.writeValueAsString(Map.of("reviewed_artifact_id", target.path("artifact_id").asText(),
-                    "content_hash", target.path("content_hash").asText(), "approved", true, "issues", List.of(),
+                    "content_hash", target.path("content_hash").asText(),
+                    "checks", Map.of("topic", true, "genre", true, "language", true, "ending", true,
+                            "length", true, "citations", true, "readable", true),
+                    "approved", true, "issues", List.of(),
                     "reason", "已读取同一版本讲稿与研究证据，引用编号可核查；实际时长尚未测量。")), token);
         }
         throw new IllegalStateException("测试 Agent 未定义：" + role);

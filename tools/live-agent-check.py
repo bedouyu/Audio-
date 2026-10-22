@@ -165,7 +165,9 @@ def run_audio_case(token, minutes, instruction, label):
     newest = newest_by_kind(artifacts)
     draft, review = newest.get("SCRIPT_DRAFT"), newest.get("REVIEW_REPORT")
     lessons = snapshot.get("lessons") or []
-    script = lessons[0].get("script", "") if lessons else (draft["content"] if draft else "")
+    # 队列按片段返回，验收要用完整讲稿，只取第一段会把正常正文误判成"没有结尾"。
+    script = "\n\n".join(item.get("script", "") for item in lessons if item.get("script")) \
+        if lessons else (draft["content"] if draft else "")
     if not script:
         print(f"[{label}] status={snapshot.get('status')} no script; errors={snapshot.get('errors')}")
         return {"label": label, "minutes": minutes, "ok": False, "wall": elapsed,
@@ -316,8 +318,9 @@ def main():
                         rows.append(row)
                 except Exception as error:  # noqa: BLE001 - report and continue
                     print(f"[{label}#{repeat+1}] FAILED: {type(error).__name__}: {error}")
-    summarise(rows)
+    # 内容是否满足要求是主指标；时长偏差只在后面作为参考列出。
     report_conformance(not args.no_judge)
+    summarise(rows)
     return 0 if rows else 1
 
 

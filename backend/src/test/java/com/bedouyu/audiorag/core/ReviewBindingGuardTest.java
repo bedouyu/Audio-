@@ -53,6 +53,26 @@ class ReviewBindingGuardTest {
         assertThatThrownBy(() -> guard.validate(report("b", scriptB, true, List.of()), context)).hasMessageContaining("同一目标讲稿的本机检查");
     }
 
+    @Test void reviewMustStateEveryCheckExplicitly() {
+        var context = context(Set.of("a"));
+        artifact("a", scriptA); readAllAndCheck("a", scriptA, context);
+        String halfChecked = json.writeValueAsString(Map.of("reviewed_artifact_id", "a",
+                "content_hash", Hashing.sha256(scriptA), "checks", Map.of("topic", true),
+                "approved", true, "issues", List.of(), "reason", "只表态了一项"));
+
+        assertThatThrownBy(() -> guard.validate(halfChecked, context)).hasMessageContaining("缺少布尔项");
+    }
+
+    @Test void aFailedCheckCannotBeReportedAsApproved() {
+        var context = context(Set.of("a"));
+        artifact("a", scriptA); readAllAndCheck("a", scriptA, context);
+        var checks = new java.util.HashMap<String, Object>(allChecksMet());
+        checks.put("ending", false);
+
+        assertThatThrownBy(() -> guard.validate(report("a", scriptA, true, List.of(), checks), context))
+                .hasMessageContaining("不能 approved=true");
+    }
+
     @Test void rejectionWithARealFailedCheckRemainsAValidBoundReview() {
         var context = context(Set.of("a"));
         String source = "没有引用的课程讲稿说明一些观点，但并未提供对应来源，复核后需要补充关键事实的证据才可以使用。";
@@ -87,8 +107,17 @@ class ReviewBindingGuardTest {
         return List.of(Map.of("id", "E1", "source_key", "old:key", "title", "来源", "source", "knowledge", "score", .9));
     }
     private String report(String id, String source, boolean approved, List<String> issues) {
+        return report(id, source, approved, issues, allChecksMet());
+    }
+    private Map<String, Object> allChecksMet() {
+        return Map.of("topic", true, "genre", true, "language", true, "ending", true,
+                "length", true, "citations", true, "readable", true);
+    }
+    private String report(String id, String source, boolean approved, List<String> issues,
+                          Map<String, Object> checks) {
         return json.writeValueAsString(Map.of("reviewed_artifact_id", id, "content_hash", Hashing.sha256(source),
-                "approved", approved, "issues", issues, "reason", "已核对目标全文和本机检查，按证据记录结论"));
+                "checks", checks, "approved", approved, "issues", issues,
+                "reason", "已核对目标全文和本机检查，按证据记录结论"));
     }
     private tools.jackson.databind.JsonNode args(Map<String, Object> value) { return json.valueToTree(value); }
     private AgentExecutionContext context(Set<String> ids) {

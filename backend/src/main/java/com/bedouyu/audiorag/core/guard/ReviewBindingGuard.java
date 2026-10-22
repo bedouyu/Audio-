@@ -10,6 +10,12 @@ import java.util.*;
 /** A review can only describe the exact script the reviewer read and checked. */
 @Component
 public class ReviewBindingGuard {
+    /**
+     * 复核必须逐项表态，而不是给一个含糊的 approved：
+     * 主题、体裁、语言、结尾、篇幅、引用、可朗读性。
+     */
+    public static final List<String> CHECKS = List.of(
+            "topic", "genre", "language", "ending", "length", "citations", "readable");
     private final AgentArtifactStore artifacts;
     private final ObjectMapper json;
 
@@ -29,6 +35,18 @@ public class ReviewBindingGuard {
             throw new IllegalArgumentException("复核报告必须包含 reviewed_artifact_id、content_hash、approved 布尔值、issues 数组和 reason 的 JSON 对象");
         for (var issue : root.path("issues"))
             if (!issue.isTextual() || issue.asText().isBlank()) throw new IllegalArgumentException("复核问题必须是具体的非空字符串");
+
+        // 逐项结论：缺项视为没做检查；任一项不通过就不能声称通过。
+        var checks = root.path("checks");
+        if (!checks.isObject()) throw new IllegalArgumentException("复核报告必须包含 checks 对象，逐项给出结论");
+        boolean allMet = true;
+        for (String key : CHECKS) {
+            if (!checks.path(key).isBoolean())
+                throw new IllegalArgumentException("复核 checks 缺少布尔项：" + key);
+            if (!checks.path(key).asBoolean()) allMet = false;
+        }
+        if (!allMet && root.path("approved").asBoolean())
+            throw new IllegalArgumentException("checks 有未通过项时不能 approved=true；请把具体问题写进 issues 并把 approved 置为 false");
 
         String id = root.path("reviewed_artifact_id").asText();
         if (context.readableArtifacts == null || !context.readableArtifacts.contains(id))
