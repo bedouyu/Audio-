@@ -12,6 +12,8 @@ const mode = ref("record");
 const displayName = ref("");
 const scriptLanguage = ref("zh");
 const scriptId = ref("zh-daily");
+// 样例读哪种语言 ≠ 这个音色可用于哪些语言：零样本克隆能跨语言念，只是会带口音。
+const usable = ref(["zh"]);
 const typedText = ref("");
 const sample = ref(null);
 const status = ref("");
@@ -52,6 +54,7 @@ function reset() {
   mode.value = "record";
   displayName.value = "";
   scriptLanguage.value = "zh";
+  usable.value = ["zh"];
   scriptId.value = "zh-daily";
   typedText.value = "";
   sample.value = null;
@@ -66,10 +69,20 @@ function pickScript(item) {
 }
 
 function setLanguage(code) {
+  const previous = scriptLanguage.value;
   scriptLanguage.value = code;
+  // 用户没单独改过"可用于"时，跟着样例语言一起走。
+  if (usable.value.length === 1 && usable.value[0] === previous) usable.value = [code];
   const first = scriptsFor(code)[0];
   scriptId.value = first.id;
   sample.value = null;
+}
+
+function toggleUsable(code) {
+  const next = usable.value.includes(code)
+    ? usable.value.filter((item) => item !== code)
+    : [...usable.value, code];
+  if (next.length) usable.value = next;
 }
 
 async function decode(arrayBuffer) {
@@ -137,7 +150,7 @@ function submit() {
   emit("submit", {
     name: "clone-" + Date.now().toString(36),
     display_name: displayName.value.trim(),
-    languages: [scriptLanguage.value],
+    languages: [...usable.value],
     prompt_text: promptText.value.trim(),
     wav_base64: sample.value.base64,
   });
@@ -158,6 +171,15 @@ function submit() {
           <button type="button" :class="{ active: mode === 'record' }" @click="mode = 'record'">录音</button>
           <button type="button" :class="{ active: mode === 'file' }" @click="mode = 'file'">上传文件</button>
         </div>
+
+        <div class="row voice-languages">
+          <span class="muted">这个音色可用于</span>
+          <button type="button" :class="{ active: usable.includes('zh') }" @click="toggleUsable('zh')">中文</button>
+          <button type="button" :class="{ active: usable.includes('en') }" @click="toggleUsable('en')">英语</button>
+        </div>
+        <p class="muted">
+          只勾一种语言时，这个音色只用于该语言；两种都勾就能念中英混排内容。跨语言念会带上样例语言的口音。
+        </p>
 
         <template v-if="mode === 'record'">
           <div class="row">
