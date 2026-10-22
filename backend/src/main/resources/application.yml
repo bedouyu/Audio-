@@ -1,0 +1,87 @@
+server:
+  port: ${SERVER_PORT:18081}
+  address: ${SERVER_ADDRESS:127.0.0.1}
+
+spring:
+  application:
+    name: audiorag-backend
+  config:
+    import: optional:file:./config/application-private.yml
+  datasource:
+    url: ${AUDIORAG_MYSQL_URL:${DOCPILOT_MYSQL_URL:jdbc:mysql://127.0.0.1:3306/docpilot?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}}
+    username: ${AUDIORAG_MYSQL_USER:${DOCPILOT_MYSQL_USER:}}
+    password: ${AUDIORAG_MYSQL_PASSWORD:${DOCPILOT_MYSQL_PASSWORD:}}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: ${AUDIORAG_DDL_AUTO:update}
+  data:
+    redis:
+      repositories:
+        enabled: false
+      host: ${DOCPILOT_REDIS_HOST:127.0.0.1}
+      port: ${DOCPILOT_REDIS_PORT:6379}
+      timeout: 3s
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+audiorag:
+  memory:
+    strategy: ${AUDIORAG_MEMORY_STRATEGY:hybrid}
+    context-budget-chars: ${AUDIORAG_MEMORY_BUDGET_CHARS:6000}
+    tool-compaction-strategy: ${AUDIORAG_TOOL_COMPACTION_STRATEGY:structured}
+  agent:
+    enabled: ${AUDIORAG_AGENT_ENABLED:true}
+    tool-workers: ${AUDIORAG_TOOL_WORKERS:4}
+    tool-queue-capacity: ${AUDIORAG_TOOL_QUEUE_CAPACITY:16}
+    tool-timeout-ms: ${AUDIORAG_TOOL_TIMEOUT_MS:30000}
+    node-heartbeat-ms: ${AUDIORAG_NODE_HEARTBEAT_MS:10000}
+    node-lease-ms: ${AUDIORAG_NODE_LEASE_MS:90000}
+    thinking-enabled: ${AUDIORAG_AGENT_THINKING_ENABLED:false}
+  embedding-model-dir: ${AUDIORAG_EMBEDDING_MODEL_DIR:D:/AI-Toolchain/models/bge-small-zh-v1.5}
+  rag:
+    bm25-cache-entries: ${AUDIORAG_BM25_CACHE_ENTRIES:16}
+    bm25-cache-characters: ${AUDIORAG_BM25_CACHE_CHARACTERS:2000000}
+  qdrant:
+    host: ${DOCPILOT_QDRANT_HOST:127.0.0.1}
+    port: ${DOCPILOT_QDRANT_HTTP_PORT:6333}
+    collection: ${DOCPILOT_QDRANT_COLLECTION:docpilot_knowledge}
+  minio:
+    endpoint: ${DOCPILOT_MINIO_ENDPOINT:http://127.0.0.1:9000}
+    access-key: ${DOCPILOT_MINIO_ACCESS_KEY:}
+    secret-key: ${DOCPILOT_MINIO_SECRET_KEY:}
+    bucket: ${DOCPILOT_MINIO_BUCKET:docpilot-knowledge}
+  llm:
+    base-url: ${AUDIORAG_LLM_BASE_URL:https://api.deepseek.com}
+    api-key: ${AUDIORAG_LLM_API_KEY:${DEEPSEEK_API_KEY:}}
+    model: ${AUDIORAG_LLM_MODEL:deepseek-flash}
+    # 这是本机保守上限，不冒称供应商实际窗口；未知模型请核验能力后明确配置。
+    context-window: ${AUDIORAG_LLM_CONTEXT_WINDOW:65536}
+    budget-profile: ${AUDIORAG_LLM_BUDGET_PROFILE:local_conservative_cap}
+    output-reserve: ${AUDIORAG_LLM_OUTPUT_RESERVE:8192}
+    protocol-overhead: ${AUDIORAG_LLM_PROTOCOL_OVERHEAD:256}
+    minimum-safety-margin: ${AUDIORAG_LLM_MINIMUM_MARGIN:1024}
+    safety-margin-ratio: ${AUDIORAG_LLM_MARGIN_RATIO:0.10}
+    stream-usage-enabled: ${AUDIORAG_LLM_STREAM_USAGE:true}
+  web-search:
+    enabled: ${AUDIORAG_WEB_SEARCH_ENABLED:true}
+  transcription:
+    url: ${AUDIORAG_TRANSCRIPTION_URL:}
+    api-key: ${AUDIORAG_TRANSCRIPTION_API_KEY:}
+    model: ${AUDIORAG_TRANSCRIPTION_MODEL:whisper-1}
+  generated-audio-dir: ${AUDIORAG_AUDIO_DIR:../data/generated-audio}
+  speech-script: ${AUDIORAG_SPEECH_SCRIPT:../tools/synthesize.ps1}
+  speech:
+    provider: ${AUDIORAG_SPEECH_PROVIDER:windows}
+    synthesis-lease-seconds: ${AUDIORAG_SYNTHESIS_LEASE_SECONDS:300}
+    cosyvoice:
+      base-url: ${AUDIORAG_COSYVOICE_URL:http://127.0.0.1:50000}
+      timeout-seconds: ${AUDIORAG_COSYVOICE_TIMEOUT_SECONDS:600}

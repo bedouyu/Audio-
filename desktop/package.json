@@ -1,0 +1,25 @@
+{
+  "name": "audiorag-desktop",
+  "productName": "Audio智能助手",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Audio智能助手 · 一句话制作与连续收听",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "test": "node --test src/shared/*.test.js",
+    "start": "electron-vite preview"
+  },
+  "dependencies": {
+    "lucide-vue-next": "^0.468.0",
+    "vue": "^3.5.17"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "electron": "44.7.0",
+    "electron-vite": "^4.0.0",
+    "vite": "^7.0.5"
+  }
+}

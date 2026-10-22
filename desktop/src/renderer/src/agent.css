@@ -1,0 +1,31 @@
+.agent-activity {
+  background: #f4f7f6;
+  padding: 12px;
+  border-radius: 9px;
+  margin-bottom: 18px;
+}
+.agent-step {
+  border-left: 2px solid #c9ddd5;
+  margin-top: 10px;
+  padding-left: 10px;
+  font-size: 10px;
+}
+.agent-step small {
+  display: block;
+  color: #89968f;
+  margin-top: 4px;
+}
+.artifact-link {
+  margin: 12px 0;
+  font-size: 11px;
+  color: #3c806d;
+}
+.agent-capability {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+.agent-capability small {
+  color: #87948f;
+  line-height: 1.7;
+}

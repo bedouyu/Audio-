@@ -1,0 +1,18 @@
+{
+  "name": "AudioRAG 智能音频学习 Agent",
+  "short_name": "AudioRAG",
+  "description": "面向求职学习的知识检索与智能音频应用",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f1",
+  "theme_color": "#176546",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

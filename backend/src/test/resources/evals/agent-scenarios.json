@@ -1,0 +1,54 @@
+[
+  {
+    "id": "knowledge_qa",
+    "message": "先检索本项目资料，再解释本项目主题的核心概念，并给出引用。",
+    "agents": [
+      "supervisor"
+    ],
+    "tools": [
+      "knowledge_search"
+    ],
+    "artifacts": []
+  },
+  {
+    "id": "learning_plan",
+    "message": "检查已有学习进度，根据本项目主题制定一份新的学习计划草稿，包含3到6个知识点。",
+    "agents": [
+      "study_planner"
+    ],
+    "tools": [
+      "project_context",
+      "delegate_agent"
+    ],
+    "artifacts": [
+      "LEARNING_PLAN"
+    ]
+  },
+  {
+    "id": "course_with_review",
+    "message": "根据本项目资料，生成一份适合初学者的5分钟课程讲稿，并复核内容与引用。",
+    "agents": [
+      "research_agent",
+      "script_writer",
+      "review_agent"
+    ],
+    "tools": [
+      "delegate_agent",
+      "read_artifact",
+      "validate_script"
+    ],
+    "artifacts": [
+      "SCRIPT_DRAFT",
+      "REVIEW_REPORT"
+    ]
+  },
+  {
+    "id": "continue",
+    "message": "继续",
+    "agents": [
+      "supervisor"
+    ],
+    "tools": [],
+    "artifacts": []
+  }
+]

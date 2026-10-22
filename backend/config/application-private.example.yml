@@ -1,0 +1,10 @@
+# 复制为 application-private.yml 后填写；该私有文件已排除提交。
+spring:
+  datasource:
+    username: YOUR_MYSQL_USER
+    password: YOUR_MYSQL_PASSWORD
+audiorag:
+  minio:
+    access-key: YOUR_MINIO_ACCESS_KEY
+    secret-key: YOUR_MINIO_SECRET_KEY
+# 模型密钥优先使用 Windows 用户环境变量 DEEPSEEK_API_KEY。

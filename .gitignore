@@ -1,0 +1,16 @@
+**/target/
+desktop/node_modules/
+desktop/out/
+desktop/dist/
+.cache/
+data/
+runtime/
+backend/config/application-private.yml
+.env
+.env.*
+*.log
+*.pid
+**/__pycache__/
+*.pyc
+.idea/
+.vscode/

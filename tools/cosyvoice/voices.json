@@ -1,0 +1,11 @@
+{
+  "voices": [
+    {
+      "name": "cosyvoice-official-demo",
+      "display_name": "官方示例音色",
+      "languages": ["zh", "en"],
+      "prompt_wav": "asset/zero_shot_prompt.wav",
+      "prompt_text": "You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。"
+    }
+  ]
+}

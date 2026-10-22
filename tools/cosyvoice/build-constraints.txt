@@ -1,0 +1,2 @@
+# Whisper 20231117 setup.py imports pkg_resources, removed in setuptools 81+.
+setuptools==80.9.0
