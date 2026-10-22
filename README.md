@@ -41,7 +41,9 @@ audiorag-java/
 
 ## 启动与升级
 
-先启动已有 MySQL、MinIO、Qdrant、Redis 服务——本机由 compose 项目 `ai-services` 提供（`docker compose -f D:\AI-Services\docker-compose.yml start`），再运行 `start-backend-local.cmd` 与 `start-frontend-local.cmd`。脚本名称和用法不变。后端健康检查为 `http://127.0.0.1:18081/api/health`，桌面开发界面端口为 `5174`。
+一键启动：双击 `start-all.cmd`。它会启动 Docker Desktop（未运行时）、`ai-services` 的 MySQL/Redis/Qdrant/MinIO、后端（:18081）与桌面端（:5174），并逐步等待就绪；已在运行的环节会跳过。只想单独启动某一部时仍可用 `start-backend-local.cmd` 与 `start-frontend-local.cmd`，脚本名称和用法不变。
+
+本机四个服务由 compose 项目 `ai-services` 提供（`docker compose -f D:\AI-Services\docker-compose.yml start`，也可以交给 `start-all.cmd` 处理）。后端健康检查为 `http://127.0.0.1:18081/api/health`，桌面开发界面端口为 `5174`。
 
 后端启动脚本使用 UTF-8，并通过 `-Djava.net.useSystemProxies=true` 沿用 Windows 系统代理，避免 Java 与系统客户端走不同网络而无法读取新闻流。程序对本机环回地址强制直连，确保 MySQL、MinIO、Qdrant 等本机服务不经代理。手工运行 JAR 时也应携带这两个 JVM 参数。
 
