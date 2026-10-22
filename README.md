@@ -63,7 +63,7 @@ audiorag-java/
 
 自然语言入口为 `POST /api/v1/audio/requests`，必填 `instruction` 和 UUID `request_id`，可选 `project_id`、`previous_queue_id`、`source_record_id`、`voice`。上下文请求发送实际播放器的队列编号，避免误用同空间最近生成的另一段内容。
 
-`GET /api/v1/audio/history` 提供历史队列，`GET /api/v1/audio/voices` 检查本机音色，`GET/PUT /api/v1/audio/queues/{queueId}/progress` 读写实际收听进度。完整协议、回执幂等和失败恢复见[自然语言音频中心重构](docs/13-自然语言音频中心重构.md)。原有项目、知识库、会话、单节/连续音频、Agent 产物及核验/重置接口继续保留。
+`GET /api/v1/audio/history` 提供历史队列，`GET /api/v1/audio/voices` 检查本机音色，`GET/PUT /api/v1/audio/queues/{queueId}/progress` 读写实际收听进度。做好的音频可以**换音色重制**：`POST /api/v1/continuous-audio/{queueId}/revoice` 用新音色重新合成，讲稿与内容一个字都不变，也不调用模型；被替换的旧音频先保留 8 小时（`audiorag.audio.retention-hours`）再自动清理。完整协议、回执幂等和失败恢复见[自然语言音频中心重构](docs/13-自然语言音频中心重构.md)。原有项目、知识库、会话、单节/连续音频、Agent 产物及核验/重置接口继续保留。
 
 ## 文档与验证
 

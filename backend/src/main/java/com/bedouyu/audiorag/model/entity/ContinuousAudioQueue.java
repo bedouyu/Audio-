@@ -40,6 +40,8 @@ public class ContinuousAudioQueue {
     public void release(String nextStatus) { status = nextStatus; leaseToken = null; leaseUntil = null; touch(); }
     public void fail(String nextStatus, String error) { lastError = trim(error); release(nextStatus); }
     public void clearError() { lastError = null; touch(); }
+    /** 换音色后改写原始指令，后续补段沿用新音色。 */
+    public void revoice(String command) { commandJson = command; touch(); }
     private static String trim(String value) { return value == null ? "未知错误" : value.substring(0, Math.min(1000, value.length())); }
     private void touch() { updatedAt = Instant.now(); }
     public String getId() { return id; } public long getUserId() { return userId; } public long getProjectId() { return projectId; }

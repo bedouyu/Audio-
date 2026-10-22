@@ -13,6 +13,26 @@ const resetTarget = ref(null);
 const scriptInfo = ref(null);
 const scriptOpen = ref(false);
 const scriptBusy = ref(false);
+const revoiceVoice = ref("");
+const contentLanguages = computed(() => {
+  const texts = (playback.queue?.lessons || []).map(item => item.script || "").join(" ");
+  const languages = [];
+  if (/[\u3400-\u9fff]/.test(texts)) languages.push("zh");
+  if (/[A-Za-z]/.test(texts)) languages.push("en");
+  return languages;
+});
+const revoiceOptions = computed(() => (playback.voices || []).filter((voice) => {
+  const supported = Array.isArray(voice.languages) ? voice.languages : [String(voice.locale || "").toLowerCase()];
+  return contentLanguages.value.some(language => supported.includes(language));
+}));
+const canRevoice = computed(() => active.value && playback.queue?.status === "COMPLETE" && revoiceOptions.value.length > 0);
+async function confirmRevoice() {
+  const voice = revoiceOptions.value.find(item => item.name === revoiceVoice.value);
+  if (!voice) return;
+  const segments = playback.queue?.lessons?.length || 0;
+  if (!confirm(`用「${voice.display_name || voice.name}」重新念这 ${segments} 段？\n\n讲稿和内容不会变，只重新合成语音；按当前时长大约需要几分钟。原音色的音频会保留 8 小时，之后自动清理。`)) return;
+  await props.audio.revoice(voice.name);
+}
 const active = computed(() => playback.queue && playback.project?.id === state.project?.id);
 const records = computed(() => state.records.filter(item => item.record_type === "lesson" && item.metadata?.audio_url));
 const history = computed(() => playback.history.filter(item => item.project_id === state.project?.id));
@@ -68,6 +88,18 @@ async function exportRecord(record) {
       <p v-if="playback.instruction" class="muted">你的要求：{{ playback.instruction }}</p>
       <p class="muted">底部播放器可连续播放，返回首页也能继续收听。</p>
       <button v-if="canRefill(playback.queue, true)" :disabled="playback.refilling" @click="audio.refill(true)">{{ playback.refilling ? "正在生成…" : "继续生成后续内容" }}</button>
+      <div v-if="canRevoice" class="row revoice-row">
+        <select v-model="revoiceVoice" :disabled="playback.revoicing">
+          <option value="">换一个音色重念…</option>
+          <option v-for="voice in revoiceOptions" :key="voice.name" :value="voice.name">
+            {{ voice.display_name || voice.name }}
+          </option>
+        </select>
+        <button :disabled="!revoiceVoice || playback.revoicing" @click="confirmRevoice">
+          {{ playback.revoicing ? "正在重念…" : "换音色重制" }}
+        </button>
+      </div>
+      <p v-if="canRevoice" class="muted">讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</p>
       <details v-if="current?.script"><summary>查看当前文字稿</summary><pre>{{ current.script }}</pre></details>
       <details v-if="sources.length"><summary>参考来源 · {{ sources.length }}</summary>
         <div v-for="(item, index) in sources" :key="index" class="content-source">

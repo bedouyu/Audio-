@@ -42,9 +42,14 @@ public class ContinuousAudioService {
     private final ExecutorService executor;
     /** 用真实合成结果校准语速；手工构造（测试）时保持默认实例，不依赖 Spring 注入。 */
     private SpeechRateCalibration calibration = new SpeechRateCalibration();
+    /** 换音色后旧音频的延迟清理；手工构造（测试）时不注入也不影响主流程。 */
+    private AudioRetention retention;
 
     @Autowired(required = false)
     void setCalibration(SpeechRateCalibration value) { this.calibration = value; }
+
+    @Autowired(required = false)
+    void setRetention(AudioRetention value) { this.retention = value; }
 
     @Autowired
     public ContinuousAudioService(AudioAgent agent, SpeechService speech, ContinuousAudioStore store,
@@ -159,6 +164,34 @@ public class ContinuousAudioService {
     /** 完整讲稿：把各段正文按顺序拼成一份，供查看与导出。 */
     public String script(long userId, String queueId) {
         return store.scriptForUser(userId, queueId);
+    }
+
+    /**
+     * 换音色重念：讲稿与内容不变，只把已有片段用新音色重新合成。
+     * 不调用模型，因此没有 token 成本；代价是同量级的语音合成时间。
+     */
+    public Map<String, Object> revoice(long userId, String queueId, String voice) {
+        String requested = voice == null ? "" : voice.strip();
+        if (requested.isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "请选择要使用的音色");
+        var command = store.commandForUser(userId, queueId);
+        var snapshot = store.status(userId, queueId);
+        // 每段内容的语言都必须被新音色支持，否则在开始合成前就拒绝，避免产生半成品。
+        Set<String> languages = new LinkedHashSet<>();
+        if (snapshot.get("lessons") instanceof List<?> lessons)
+            for (Object item : lessons)
+                if (item instanceof Map<?, ?> lesson && lesson.get("script") instanceof String text && !text.isBlank())
+                    languages.add(SpeechService.detectLanguage(text));
+        for (String language : languages) speech.selectVoice(requested, language);
+        var updated = new QueueCommand(command.topic(), command.projectId(), command.courseMinutes(),
+                command.segmentMinutes(), command.audience(), requested, command.prefetchSize(),
+                command.requestId(), command.mode(), command.instruction(), command.sourceText(),
+                command.sourceTitle(), command.context());
+        var outcome = store.revoice(userId, queueId, requested, json.writeValueAsString(updated));
+        // 旧音频先留着（默认 8 小时），到点由 AudioRetention 清理。
+        if (retention != null && outcome.get("retired") instanceof List<?> retired)
+            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
+        generate(userId, queueId, ((Number) outcome.get("segments")).intValue());
+        return status(userId, queueId);
     }
 
     public Map<String, Object> refill(long userId, String queueId) {

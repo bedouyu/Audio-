@@ -144,6 +144,15 @@ public class AiController {
                 "script", script);
     }
 
+    /** 换音色重念：只重跑语音合成，讲稿不变；旧音频保留一段时间后自动清理。 */
+    @PostMapping("/api/v1/continuous-audio/{queueId}/revoice")
+    public Map<String, Object> revoice(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @RequestBody(required = false) Map<String, Object> body) {
+        Object voice = body == null ? null : body.get("voice");
+        return continuousAudio.revoice(userId(authorization), queueId, voice == null ? null : String.valueOf(voice));
+    }
+
     @PostMapping("/api/v1/continuous-audio/{queueId}/refill")
     public Map<String, Object> refill(
             @RequestHeader(value = "Authorization", required = false) String authorization,

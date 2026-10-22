@@ -183,7 +183,7 @@ public class SpeechService {
         return locale;
     }
 
-    static String detectLanguage(String text) {
+    public static String detectLanguage(String text) {
         boolean otherScript = text.codePoints().anyMatch(codePoint -> Character.isLetter(codePoint)
                 && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.HAN
                 && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN);

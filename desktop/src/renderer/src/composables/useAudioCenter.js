@@ -5,7 +5,7 @@ import { listeningContext, listeningSubmission, playbackSize, queueLesson, readP
 export function useAudioCenter(workspace) {
   const { state: workspaceState, api, mediaUrl, refreshProject } = workspace;
   const state = reactive({ queue: null, index: 0, project: null, instruction: "", time: 0, duration: 0,
-    speed: 1, playing: false, submitting: false, refilling: false, restoring: false, error: "", voices: [], voice: "", voiceStatus: "",
+    speed: 1, playing: false, submitting: false, refilling: false, revoicing: false, restoring: false, error: "", voices: [], voice: "", voiceStatus: "",
     history: [], historyStatus: "", progressStatus: "", completed: false });
   const current = computed(() => queueLesson(state.queue, state.index));
   const source = computed(() => mediaUrl(current.value?.audio_url));
@@ -305,6 +305,26 @@ export function useAudioCenter(workspace) {
     state.project = project; state.instruction = ""; state.index = 0; state.time = 0;
     state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = true; state.error = ""; save(); nextTick(attemptPlay);
   }
+  /** 换音色重念：讲稿与内容不变，只把已有片段用新音色重新合成。 */
+  async function revoice(voice) {
+    const id = state.queue?.queue_id;
+    if (!id || !voice) return false;
+    if (state.revoicing) return false;
+    const version = revision;
+    state.revoicing = true;
+    try {
+      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/revoice", "POST", { voice });
+      if (version !== revision) return false;
+      state.queue = result; state.error = ""; startPolling(); save();
+      updateHistory(result);
+      return true;
+    } catch (error) {
+      if (version === revision) state.error = error.message;
+      return false;
+    } finally {
+      state.revoicing = false;
+    }
+  }
   async function reviewSegment(segment, reason = null) {
     const reset = reason != null;
     if (!state.queue?.queue_id) return;
@@ -384,7 +404,7 @@ export function useAudioCenter(workspace) {
       for (const action of ["play", "pause", "nexttrack", "previoustrack"]) navigator.mediaSession.setActionHandler(action, null);
     }
   });
-  return { state, current, source, total, message, bindPlayer, submit, poll, refill, next, previous,
+  return { state, current, source, total, message, bindPlayer, submit, poll, refill, revoice, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
     openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
 }

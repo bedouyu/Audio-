@@ -203,6 +203,38 @@ public class ContinuousAudioStore {
         return snapshot(queue);
     }
 
+    /**
+     * 换音色：讲稿保持不变，只为每条已完成的片段分配新的音频编号并回到 PENDING，
+     * 由既有生成循环用新音色重念。返回需要延迟清理的旧音频编号。
+     */
+    public Map<String, Object> revoice(long userId, String queueId, String voice, String commandJson) {
+        var queue = required(userId, queueId);
+        reconcile(queue);
+        if ("GENERATING".equals(queue.getStatus()) || "PREPARING".equals(queue.getStatus()))
+            throw conflict("正在生成内容，请等这批片段完成后再换音色");
+        if ("CANCELLED".equals(queue.getStatus())) throw conflict("已取消的任务不能换音色");
+        var values = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
+        if (values.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus()) || "NEEDS_REVIEW".equals(s.getStatus())))
+            throw conflict("有片段仍在合成或等待核验，请先处理后再换音色");
+        var ready = values.stream().filter(s -> "READY".equals(s.getStatus())).toList();
+        if (ready.isEmpty()) throw conflict("还没有已完成的音频，先等第一段生成完成");
+        List<String> retired = new ArrayList<>();
+        for (var segment : ready) {
+            String nextAudioId = UUID.randomUUID().toString();
+            audit(segment, Map.of("action", "REVOICE", "user_id", userId, "voice", voice,
+                    "previous_audio_id", segment.getAudioId(), "new_audio_id", nextAudioId,
+                    "time", Instant.now().toString()));
+            // 换音色是同一个条目的重制：删掉旧记录，重新合成后再写回一条，避免历史里出现重复条目。
+            if (segment.getRecordId() != null) records.deleteProjectRecord(segment.getRecordId());
+            retired.add(segment.getAudioId());
+            segment.reset(nextAudioId);
+        }
+        queue.revoice(commandJson);
+        queue.clearError();
+        refreshQueueStatus(queue);
+        return Map.of("segments", ready.size(), "retired", List.copyOf(retired));
+    }
+
     public Optional<Map<String, Object>> statusIfPresent(long userId, String queueId) {
         var current = queues.findById(queueId).orElse(null);
         if (current == null) return Optional.empty();
@@ -402,6 +434,8 @@ public class ContinuousAudioStore {
         result.put("total_segments", values.size()); result.put("storage", "mysql-durable");
         result.put("prefetch_size", command.prefetchSize());
         result.put("mode", command.mode());
+        // 记录实际音色：换音色后前端与历史都能看到"这条是用什么声音念的"。
+        result.put("voice", command.voice() == null ? "" : command.voice());
         result.put("project_id", queue.getProjectId());
         result.put("title", queue.getCourseTitle() == null ? command.topic() : queue.getCourseTitle());
         result.put("instruction", command.context().getOrDefault("request_instruction", command.instruction() == null ? command.topic() : command.instruction()));

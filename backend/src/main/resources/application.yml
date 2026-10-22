@@ -93,6 +93,10 @@ audiorag:
     api-key: ${AUDIORAG_TRANSCRIPTION_API_KEY:}
     model: ${AUDIORAG_TRANSCRIPTION_MODEL:whisper-1}
   generated-audio-dir: ${AUDIORAG_AUDIO_DIR:../data/generated-audio}
+  audio:
+    # 换音色后旧音频先保留这么久（可回放对比），到期由定时任务清理。
+    retention-hours: ${AUDIORAG_AUDIO_RETENTION_HOURS:8}
+    sweep-ms: ${AUDIORAG_AUDIO_SWEEP_MS:900000}
   speech-script: ${AUDIORAG_SPEECH_SCRIPT:../tools/synthesize.ps1}
   speech:
     provider: ${AUDIORAG_SPEECH_PROVIDER:windows}
