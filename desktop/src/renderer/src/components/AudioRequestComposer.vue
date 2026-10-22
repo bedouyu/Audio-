@@ -1,11 +1,27 @@
 <script setup>
 import { ref } from "vue";
-import { ArrowUp, Headphones } from "lucide-vue-next";
+import { ArrowUp, Headphones, Mic } from "lucide-vue-next";
+import VoiceImportDialog from "./VoiceImportDialog.vue";
 const props = defineProps({ audio: Object, compact: Boolean });
 const emit = defineEmits(["submit"]);
 const { state: playback } = props.audio;
 const instruction = ref("");
 const field = ref(null);
+const importOpen = ref(false);
+const importing = ref(false);
+async function importVoice(payload) {
+  importing.value = true;
+  try {
+    const voice = await props.audio.importVoice(payload);
+    playback.voice = voice.name;
+    playback.voiceStatus = "已录入音色：" + (voice.display_name || voice.name) + "，下次生成会用它朗读。";
+    importOpen.value = false;
+  } catch (error) {
+    playback.error = error.message;
+  } finally {
+    importing.value = false;
+  }
+}
 const examples = ["帮我整理最近的时政，做成 10 分钟简报", "把我导入的小说按章节读给我听", "讲一段适合练听力的英文故事，再解释难句"];
 function submit() {
   if (instruction.value.trim() && !playback.submitting) emit("submit", instruction.value.trim());
@@ -49,6 +65,10 @@ function voiceLanguage(voice) {
         </select>
       </label>
       <p class="muted">{{ playback.voiceStatus }}</p>
+      <button type="button" class="import-voice" :disabled="playback.submitting || importing" @click="importOpen = true">
+        <Mic :size="15" /> 录入我的音色（上传或录音）
+      </button>
     </details>
+    <VoiceImportDialog :open="importOpen" :busy="importing" @close="importOpen = false" @submit="importVoice" />
   </div>
 </template>

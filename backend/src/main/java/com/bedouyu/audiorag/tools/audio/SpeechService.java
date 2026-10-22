@@ -59,6 +59,21 @@ public class SpeechService {
         return synthesize(lessonId, text, voice, null);
     }
 
+    /** 只有 CosyVoice 支持零样本音色录入；Windows SAPI 不能克隆音色，直接说明而不是假装成功。 */
+    public Map<String, Object> importVoice(Map<String, Object> request) {
+        if (cosyVoice == null)
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "当前语音提供方是 Windows SAPI，不支持录入样例音色；切换到 CosyVoice 后可用");
+        return cosyVoice.importVoice(request);
+    }
+
+    public void deleteVoice(String name) {
+        if (cosyVoice == null)
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "当前语音提供方是 Windows SAPI，没有可删除的录入音色");
+        cosyVoice.deleteVoice(name);
+    }
+
     /** Returns the active provider's real inventory; never fabricates voices or silently changes providers. */
     public List<Map<String, Object>> voices() {
         if (cosyVoice != null) return cosyVoice.voices();

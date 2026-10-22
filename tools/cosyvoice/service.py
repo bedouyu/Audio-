@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import io
 import json
 import logging
@@ -15,9 +16,30 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+try:  # Python 3.13 移除了 audioop；更早的版本才有重采样与音量计算
+    import audioop
+except ModuleNotFoundError:  # pragma: no cover - 取决于运行环境
+    audioop = None
+
 
 LOGGER = logging.getLogger("audio-assistant.cosyvoice")
 MAX_BODY_BYTES = 512 * 1024
+MAX_VOICE_BYTES = 8 * 1024 * 1024
+VOICE_SAMPLE_RATE = 16000
+VOICE_MIN_SECONDS = 3.0
+VOICE_MAX_SECONDS = 30.0
+VOICE_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# CosyVoice3 的 zero-shot 要求 prompt_text 里出现 <|endofprompt|>，前面是提示前缀，后面才是
+# 参考录音的逐字内容。用户录入时只写那句原话，标记由适配器补上；官方示例就是这个形状。
+PROMPT_PREFIX = "You are a helpful assistant."
+PROMPT_MARKER = "<|endofprompt|>"
+
+
+def prompt_with_marker(transcript: str) -> str:
+    text = transcript.strip()
+    if PROMPT_MARKER in text:
+        return text
+    return f"{PROMPT_PREFIX}{PROMPT_MARKER}{text}"
 
 
 class ServiceError(Exception):
@@ -73,6 +95,7 @@ def load_voices(filename: Path, repo_root: Path) -> tuple[Voice, ...]:
             raise ValueError("当前音色支持的语言必须为 zh、en 或二者")
         if not isinstance(prompt_text, str) or not prompt_text.strip():
             raise ValueError("参考录音需要对应的文字")
+        prompt_text = prompt_with_marker(prompt_text)
         if not isinstance(wav, str) or not wav or "://" in wav:
             raise ValueError("参考音频必须是部署目录中的本地 WAV 文件")
         relative = Path(wav)
@@ -98,6 +121,49 @@ def wav_from_pcm(pcm: bytes, sample_rate: int) -> bytes:
         audio.setframerate(sample_rate)
         audio.writeframes(pcm)
     return output.getvalue()
+
+
+def trim_silence(frames: bytes, threshold: int = 350, window_ms: int = 50) -> bytes:
+    """按窗口去掉首尾静音，保留中间停顿；整段都静音时原样返回，交给时长校验报错。"""
+    step = max(2, int(VOICE_SAMPLE_RATE * window_ms / 1000) * 2)
+    windows = [frames[index:index + step] for index in range(0, len(frames), step)]
+    voiced = [index for index, window in enumerate(windows)
+              if len(window) == step and audioop.rms(window, 2) >= threshold]
+    if not voiced:
+        return frames
+    start = max(0, voiced[0] - 2) * step
+    end = min(len(windows), voiced[-1] + 3) * step
+    return frames[start:end]
+
+
+def normalize_sample(payload: bytes) -> bytes:
+    """把上传的样例转成 16k 单声道 16 位 WAV，并裁掉首尾静音。"""
+    if audioop is None:
+        raise ServiceError(500, "当前 Python 缺少 audioop，无法处理样例音频")
+    try:
+        with wave.open(io.BytesIO(payload), "rb") as source:
+            channels = source.getnchannels()
+            width = source.getsampwidth()
+            rate = source.getframerate()
+            frames = source.readframes(source.getnframes())
+    except (wave.Error, EOFError) as failure:
+        raise ServiceError(422, "样例音频必须是有效的 WAV 文件") from failure
+    if width != 2 or channels not in (1, 2):
+        raise ServiceError(422, "样例音频须为 16 位 PCM（单声道或立体声）")
+    if not 8000 <= rate <= 48000:
+        raise ServiceError(422, "样例音频的采样率应在 8k 到 48k 之间")
+    if not frames:
+        raise ServiceError(422, "样例音频没有声音数据")
+    if channels == 2:
+        frames = audioop.tomono(frames, 2, 0.5, 0.5)
+    if rate != VOICE_SAMPLE_RATE:
+        frames, _ = audioop.ratecv(frames, 2, 1, rate, VOICE_SAMPLE_RATE, None)
+    frames = trim_silence(frames)
+    seconds = len(frames) / (VOICE_SAMPLE_RATE * 2)
+    if seconds < VOICE_MIN_SECONDS or seconds > VOICE_MAX_SECONDS:
+        raise ServiceError(422, f"样例时长应为 {VOICE_MIN_SECONDS:.0f}—{VOICE_MAX_SECONDS:.0f} 秒，"
+                                f"当前为 {seconds:.1f} 秒")
+    return wav_from_pcm(frames, VOICE_SAMPLE_RATE)
 
 
 class CosyVoiceEngine:
@@ -133,7 +199,8 @@ class CosyVoiceEngine:
                 # Upstream joins this thread without propagating its exception.
                 # The adapter's single-task lock keeps this marker bound to one synthesis.
                 self._worker_failure = failure
-                LOGGER.error("CosyVoice language-model worker failed (%s)", type(failure).__name__)
+                # 带堆栈记录：音色样例不合适时，断言位置就是唯一线索。
+                LOGGER.exception("CosyVoice language-model worker failed (%s)", type(failure).__name__)
 
         self.model.model.llm_job = guarded
 
@@ -174,11 +241,13 @@ class CosyVoiceEngine:
 
 
 class AdapterService:
-    def __init__(self, max_chars: int = 20000):
+    def __init__(self, max_chars: int = 20000, voices_file: Path | None = None, repo_root: Path | None = None):
         self.max_chars = max_chars
         self.engine = None
         self.initialization_error = False
         self.lock = threading.Lock()
+        self.voices_file = voices_file
+        self.repo_root = repo_root
 
     def health(self) -> dict:
         engine = self.engine
@@ -201,6 +270,93 @@ class AdapterService:
 
     def voices(self) -> dict:
         return {"voices": [voice.public() for voice in self.require_engine().voices]}
+
+    def import_voice(self, request: dict) -> dict:
+        """录入一个零样本音色：规范化样例、注册到模型、写入 voices.json。
+
+        注册只是对样例做一次特征提取并缓存，不训练、不改模型权重。
+        """
+        engine = self.require_engine()
+        if not isinstance(request, dict) or set(request) - {"name", "display_name", "languages",
+                                                            "prompt_text", "wav_base64"}:
+            raise ServiceError(422, "音色录入请求格式无效")
+        name = request.get("name", "")
+        if not isinstance(name, str) or not VOICE_NAME.fullmatch(name):
+            raise ServiceError(422, "音色标识只能使用字母、数字、下划线或连字符，最长 64 个字符")
+        if any(voice.name == name for voice in engine.voices):
+            raise ServiceError(409, "音色标识已存在")
+        display = str(request.get("display_name") or "").strip()
+        if not display or len(display) > 80:
+            raise ServiceError(422, "音色名称需为 1 到 80 个字符")
+        languages = request.get("languages") or ["zh"]
+        if not isinstance(languages, list) or not languages or any(item not in ("zh", "en") for item in languages):
+            raise ServiceError(422, "音色语言仅支持 zh、en 或二者")
+        languages = list(dict.fromkeys(languages))
+        prompt_text = str(request.get("prompt_text") or "").strip()
+        if not prompt_text or len(prompt_text) > 300:
+            raise ServiceError(422, "样例文字需为 1 到 300 个字符")
+        prompt_text = prompt_with_marker(prompt_text)
+        encoded = request.get("wav_base64")
+        if not isinstance(encoded, str) or not encoded:
+            raise ServiceError(422, "缺少样例音频")
+        try:
+            payload = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as failure:
+            raise ServiceError(422, "样例音频不是有效的 base64") from failure
+        if len(payload) > MAX_VOICE_BYTES:
+            raise ServiceError(413, "样例音频过大")
+        if self.voices_file is None or self.repo_root is None:
+            raise ServiceError(500, "音色目录未配置，无法保存")
+        sample = normalize_sample(payload)
+
+        target = self.repo_root / "asset" / "voices" / f"{name}.wav"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(sample)
+        if not self.lock.acquire(timeout=10):
+            target.unlink(missing_ok=True)
+            raise ServiceError(503, "本地语音服务正在合成，请稍后再录入")
+        try:
+            if not engine.model.add_zero_shot_spk(prompt_text, str(target), name):
+                raise ServiceError(503, "音色注册失败，请换一段更清晰的样例")
+            voice = Voice(name, display, tuple(languages), target, prompt_text)
+            engine.voices = engine.voices + (voice,)
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            self.lock.release()
+
+        data = json.loads(self.voices_file.read_text(encoding="utf-8-sig"))
+        entries = [entry for entry in data.get("voices", []) if entry.get("name") != name]
+        entries.append({"name": name, "display_name": display, "languages": languages,
+                        "prompt_wav": target.relative_to(self.repo_root).as_posix(),
+                        "prompt_text": prompt_text, "enabled": True})
+        data["voices"] = entries
+        self.voices_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        LOGGER.info("Imported voice %s from %s", name, target)
+        return voice.public()
+
+    def delete_voice(self, name: str) -> dict:
+        engine = self.require_engine()
+        voice = next((item for item in engine.voices if item.name == name), None)
+        if voice is None:
+            raise ServiceError(404, "音色不存在")
+        if self.voices_file is None or self.repo_root is None:
+            raise ServiceError(500, "音色目录未配置，无法删除")
+        custom = voice.prompt_wav.is_relative_to(self.repo_root / "asset" / "voices")
+        if not custom:
+            raise ServiceError(409, "内置示例音色不能删除")
+        data = json.loads(self.voices_file.read_text(encoding="utf-8-sig"))
+        kept = [entry for entry in data.get("voices", []) if entry.get("name") != name]
+        if not kept:
+            raise ServiceError(409, "至少要保留一个音色")
+        data["voices"] = kept
+        self.voices_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        voice.prompt_wav.unlink(missing_ok=True)
+        engine.model.frontend.spk2info.pop(name, None)
+        engine.voices = tuple(item for item in engine.voices if item.name != name)
+        LOGGER.info("Deleted voice %s", name)
+        return {"deleted": name}
 
     def synthesize(self, request: dict) -> bytes:
         engine = self.require_engine()
@@ -268,37 +424,63 @@ def handler_for(service: AdapterService):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+        def read_json(self, limit: int, label: str) -> dict:
+            if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                raise ServiceError(415, f"{label}仅接受 JSON")
+            if self.headers.get("Transfer-Encoding"):
+                raise ServiceError(400, "不支持分块请求正文")
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError as failure:
+                raise ServiceError(400, "请求长度无效") from failure
+            if not 0 < length <= limit:
+                raise ServiceError(413, f"{label}正文为空或过大")
+            self.connection.settimeout(30)
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ServiceError(400, f"{label}正文不完整")
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except (UnicodeError, ValueError) as failure:
+                raise ServiceError(400, "请求正文不是有效 UTF-8 JSON") from failure
+
         def do_POST(self):
             try:
-                if self.path != "/synthesize":
+                if self.path == "/synthesize":
+                    self.reply(200, service.synthesize(self.read_json(MAX_BODY_BYTES, "合成请求")), "audio/wav")
+                elif self.path == "/voices":
+                    self.json_reply(201, service.import_voice(self.read_json(MAX_VOICE_BYTES, "音色录入")))
+                else:
                     raise ServiceError(404, "接口不存在")
-                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
-                    raise ServiceError(415, "合成接口仅接受 JSON")
-                if self.headers.get("Transfer-Encoding"):
-                    raise ServiceError(400, "不支持分块请求正文")
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                except ValueError as failure:
-                    raise ServiceError(400, "请求长度无效") from failure
-                if not 0 < length <= MAX_BODY_BYTES:
-                    raise ServiceError(413, "合成请求正文为空或过大")
-                self.connection.settimeout(30)
-                raw = self.rfile.read(length)
-                if len(raw) != length:
-                    raise ServiceError(400, "合成请求正文不完整")
-                try:
-                    request = json.loads(raw.decode("utf-8"))
-                except (UnicodeError, ValueError) as failure:
-                    raise ServiceError(400, "请求正文不是有效 UTF-8 JSON") from failure
-                self.reply(200, service.synthesize(request), "audio/wav")
             except ServiceError as failure:
                 self.json_reply(failure.status, {"detail": failure.detail})
             except (BrokenPipeError, ConnectionResetError):
                 # A disconnected caller must not trigger another synthesis attempt.
                 pass
             except Exception as failure:
-                LOGGER.exception("Synthesis failed (%s)", type(failure).__name__)
-                self.json_reply(503, {"detail": "本地语音合成失败，请检查服务日志，不会自动重复合成"})
+                LOGGER.exception("Request failed (%s)", type(failure).__name__)
+                self.json_reply(503, {"detail": "本地语音服务处理失败，请检查服务日志，不会自动重复合成"})
+
+        def drain_body(self):
+            """DELETE 之类不读正文的方法也要排空请求体，否则直接关闭连接会让客户端收到 RST。"""
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+            except ValueError:
+                return
+            if 0 < length <= MAX_VOICE_BYTES:
+                self.rfile.read(length)
+
+        def do_DELETE(self):
+            try:
+                prefix = "/voices/"
+                if not self.path.startswith(prefix):
+                    raise ServiceError(404, "接口不存在")
+                self.drain_body()
+                self.json_reply(200, service.delete_voice(self.path[len(prefix):]))
+            except ServiceError as failure:
+                self.json_reply(failure.status, {"detail": failure.detail})
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     return Handler
 
@@ -320,7 +502,7 @@ def main():
     if not 1 <= args.port <= 65535 or not 1 <= args.max_chars <= 100000:
         parser.error("端口或文字长度上限无效")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    service = AdapterService(args.max_chars)
+    service = AdapterService(args.max_chars, voices_file=voices_file, repo_root=repo_root)
 
     def initialize():
         try:

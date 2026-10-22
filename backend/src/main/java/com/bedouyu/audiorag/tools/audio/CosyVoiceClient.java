@@ -139,6 +139,61 @@ final class CosyVoiceClient {
         }
     }
 
+    /**
+     * 录入一个零样本音色：服务端只需对样例做一次特征提取并缓存，不训练模型。
+     * 请求体包含 base64 样例 WAV、样例文字与语言。
+     */
+    Map<String, Object> importVoice(Map<String, Object> request) {
+        try {
+            byte[] body = JSON.writeValueAsBytes(request);
+            JsonNode response = control.post().uri("/voices").contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON).contentLength(body.length).body(body)
+                    .retrieve().body(JsonNode.class);
+            if (response == null || !response.path("name").isTextual()) throw invalidInventory();
+            var voice = new LinkedHashMap<String, Object>();
+            voice.put("name", response.path("name").asText());
+            voice.put("display_name", response.path("display_name").asText(response.path("name").asText()));
+            voice.put("provider", "cosyvoice");
+            voice.put("enabled", true);
+            voice.put("languages", JSON.convertValue(response.path("languages"), List.class));
+            return voice;
+        } catch (RestClientResponseException failure) {
+            throw rejected(failure, "录入音色");
+        } catch (ResourceAccessException unavailable) {
+            throw unavailable();
+        } catch (RestClientException malformed) {
+            throw invalidInventory();
+        }
+    }
+
+    void deleteVoice(String name) {
+        try {
+            control.delete().uri("/voices/{name}", name).accept(MediaType.APPLICATION_JSON)
+                    .retrieve().toBodilessEntity();
+        } catch (RestClientResponseException failure) {
+            throw rejected(failure, "删除音色");
+        } catch (ResourceAccessException unavailable) {
+            throw unavailable();
+        }
+    }
+
+    /** 把适配器的拒绝原因原样带回前端，避免只显示一个 HTTP 状态码。 */
+    private static ApiException rejected(RestClientResponseException failure, String action) {
+        String detail = "";
+        try {
+            detail = JSON.readTree(failure.getResponseBodyAsString()).path("detail").asText("");
+        } catch (RuntimeException ignored) {
+            // 响应体不是 JSON 时退回通用提示。
+        }
+        int status = failure.getStatusCode().value();
+        if (status == 409) return new ApiException(HttpStatus.CONFLICT,
+                detail.isBlank() ? action + "失败：名称已存在" : detail);
+        if (status == 400 || status == 413 || status == 422) return new ApiException(HttpStatus.BAD_REQUEST,
+                detail.isBlank() ? action + "失败：样例不符合要求" : detail);
+        return new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                "本地语音服务暂时不可用（HTTP " + status + "），" + action + "未完成");
+    }
+
     private static ApiException serviceFailure(int status) {
         if (status == 400 || status == 422)
             return new ApiException(HttpStatus.BAD_REQUEST, "CosyVoice 拒绝了合成参数，请检查文本、语言和音色");

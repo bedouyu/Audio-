@@ -351,6 +351,16 @@ export function useAudioCenter(workspace) {
       state.restoring = true; startPolling(); poll().then(() => { if (version === revision) restoreProgress(saved); });
     } catch { /* Old project snapshots are optional. */ }
   }
+  /** 录入零样本音色：服务端只对样例做一次特征提取并缓存，不训练模型。 */
+  async function importVoice(payload) {
+    const voice = await api("/api/v1/audio/voices", "POST", payload);
+    await loadVoices(identity);
+    return voice;
+  }
+  async function removeVoice(name) {
+    await api("/api/v1/audio/voices/" + encodeURIComponent(name), "DELETE");
+    await loadVoices(identity);
+  }
   /** 完整讲稿：后端把各段正文按顺序合并，供查看与导出成一个文件。 */
   async function loadScript(queueId) {
     const id = queueId || state.queue?.queue_id;
@@ -376,5 +386,5 @@ export function useAudioCenter(workspace) {
   });
   return { state, current, source, total, message, bindPlayer, submit, poll, refill, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
-    openQueue, refreshHistory, save, clear, loadScript, exportScript };
+    openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
 }

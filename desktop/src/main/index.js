@@ -225,6 +225,13 @@ function createWindow() {
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // 录入音色需要麦克风；只放行本窗口的 media 权限，其余一律拒绝。
+  window.webContents.session.setPermissionRequestHandler((contents, permission, callback) =>
+    callback(permission === "media" && contents === window.webContents),
+  );
+  window.webContents.session.setPermissionCheckHandler((contents, permission) =>
+    permission === "media" && contents === window.webContents,
+  );
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   if (process.env.ELECTRON_RENDERER_URL)
     window.loadURL(process.env.ELECTRON_RENDERER_URL);

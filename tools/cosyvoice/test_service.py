@@ -194,5 +194,144 @@ class ServiceTests(unittest.TestCase):
                     load_voices(manifest, root)
 
 
+def tone_wav(seconds, rate=44100, channels=2, edge=0.4):
+    """生成一段两侧静音、中间有声音的 WAV，用来验证重采样与静音裁剪。"""
+    frames = int(rate * seconds)
+    start, end = int(rate * edge), frames - int(rate * edge)
+    data = bytearray()
+    for index in range(frames):
+        value = 0
+        if start <= index < end and (index // 40) % 2 == 0:
+            value = 9000
+        data += (value.to_bytes(2, "little", signed=True)) * channels
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        wav.writeframes(bytes(data))
+    return buffer.getvalue()
+
+
+class SampleNormalizationTests(unittest.TestCase):
+    def test_it_downsamples_stereo_and_trims_silence(self):
+        from service import normalize_sample
+        with wave.open(io.BytesIO(normalize_sample(tone_wav(5.0))), "rb") as decoded:
+            self.assertEqual(16000, decoded.getframerate())
+            self.assertEqual(1, decoded.getnchannels())
+            self.assertEqual(2, decoded.getsampwidth())
+            seconds = decoded.getnframes() / 16000
+        self.assertGreater(seconds, 3.5)
+        self.assertLess(seconds, 4.6)
+
+    def test_too_short_or_broken_samples_are_rejected(self):
+        from service import normalize_sample
+        with self.assertRaises(ServiceError) as short:
+            normalize_sample(tone_wav(2.0))
+        self.assertEqual(422, short.exception.status)
+        with self.assertRaises(ServiceError) as broken:
+            normalize_sample(b"not a wav")
+        self.assertEqual(422, broken.exception.status)
+
+
+class VoiceImportTests(unittest.TestCase):
+    def manifest(self, root):
+        path = root / "voices.json"
+        path.write_text(json.dumps({"voices": [{
+            "name": "demo", "display_name": "示例", "languages": ["zh"],
+            "prompt_wav": "asset/demo.wav", "prompt_text": "示例文字"}]}, ensure_ascii=False), encoding="utf-8")
+        (root / "asset").mkdir()
+        (root / "asset" / "demo.wav").write_bytes(wav_from_pcm(b"\x00\x00" * 16000, 16000))
+        return path
+
+    def service(self, root, manifest):
+        from service import Voice
+        service = AdapterService(voices_file=manifest, repo_root=root)
+        engine = FakeEngine()
+        # 让假引擎的音色与 manifest 一致，否则重复名与内置音色判断都会测错对象。
+        engine.voices = (Voice("demo", "示例", ("zh",), root / "asset" / "demo.wav", "示例文字"),)
+        engine.model = MagicMock()
+        engine.model.add_zero_shot_spk.return_value = True
+        engine.model.frontend.spk2info = {}
+        service.engine = engine
+        return service, engine
+
+    def payload(self, **overrides):
+        import base64
+        body = {"name": "my-voice", "display_name": "我的声音", "languages": ["zh"],
+                "prompt_text": "这是一段样例文字", "wav_base64": base64.b64encode(tone_wav(5.0)).decode()}
+        body.update(overrides)
+        return body
+
+    def test_prompt_text_gets_the_cosyvoice3_end_of_prompt_marker(self):
+        from service import PROMPT_MARKER, prompt_with_marker
+        composed = prompt_with_marker("希望你以后能够做的比我还好哇。")
+        self.assertIn(PROMPT_MARKER, composed)
+        self.assertTrue(composed.endswith("希望你以后能够做的比我还好哇。"))
+        # 已经带标记的配置原样保留，不会重复添加。
+        already = "You are a helpful assistant.<|endofprompt|>你好"
+        self.assertEqual(already, prompt_with_marker(already))
+
+    def test_import_stores_the_marker_so_synthesis_can_run_later(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            service, engine = self.service(root, self.manifest(root))
+            service.import_voice(self.payload())
+            entries = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
+            stored = next(entry for entry in entries if entry["name"] == "my-voice")
+            self.assertIn("<|endofprompt|>", stored["prompt_text"])
+            registered = engine.model.add_zero_shot_spk.call_args[0]
+            self.assertIn("<|endofprompt|>", registered[0])
+
+    def test_import_writes_normalized_sample_registers_speaker_and_updates_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            service, engine = self.service(root, self.manifest(root))
+
+            result = service.import_voice(self.payload())
+
+            self.assertEqual("my-voice", result["name"])
+            saved = root / "asset" / "voices" / "my-voice.wav"
+            self.assertTrue(saved.is_file())
+            with wave.open(str(saved), "rb") as decoded:
+                self.assertEqual(16000, decoded.getframerate())
+                self.assertEqual(1, decoded.getnchannels())
+            entries = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
+            self.assertEqual({"demo", "my-voice"}, {entry["name"] for entry in entries})
+            engine.model.add_zero_shot_spk.assert_called_once()
+            self.assertIn("my-voice", {voice.name for voice in engine.voices})
+
+    def test_duplicate_or_invalid_imports_are_rejected_without_touching_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            service, engine = self.service(root, self.manifest(root))
+
+            for body, status in ((self.payload(name="demo"), 409),
+                                 (self.payload(prompt_text=""), 422),
+                                 (self.payload(languages=["fr"]), 422),
+                                 (self.payload(name="bad name"), 422)):
+                with self.assertRaises(ServiceError) as raised:
+                    service.import_voice(body)
+                self.assertEqual(status, raised.exception.status)
+
+            engine.model.add_zero_shot_spk.assert_not_called()
+            self.assertFalse((root / "asset" / "voices").exists())
+
+    def test_only_imported_voices_can_be_deleted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            service, _ = self.service(root, self.manifest(root))
+            service.import_voice(self.payload())
+
+            service.delete_voice("my-voice")
+
+            entries = json.loads((root / "voices.json").read_text(encoding="utf-8"))["voices"]
+            self.assertEqual({"demo"}, {entry["name"] for entry in entries})
+            self.assertFalse((root / "asset" / "voices" / "my-voice.wav").exists())
+            with self.assertRaises(ServiceError) as builtin:
+                service.delete_voice("demo")
+            self.assertEqual(409, builtin.exception.status)
+
+
 if __name__ == "__main__":
     unittest.main()

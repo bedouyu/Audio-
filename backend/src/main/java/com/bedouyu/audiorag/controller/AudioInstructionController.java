@@ -1,6 +1,7 @@
 package com.bedouyu.audiorag.controller;
 
 import com.bedouyu.audiorag.model.dto.AudioInstructionRequest;
+import com.bedouyu.audiorag.model.dto.VoiceImportRequest;
 import com.bedouyu.audiorag.service.*;
 import com.bedouyu.audiorag.tools.audio.SpeechService;
 import jakarta.validation.Valid;
@@ -35,8 +36,29 @@ public class AudioInstructionController {
             @RequestParam(name = "project_id", required = false) Long project) {
         return Map.of("queues", queues.history(user(token), project));
     }
-    @GetMapping("/voices") public Map<String, Object> voices(@RequestHeader(value = "Authorization", required = false) String token) {
+    /** 录入一个零样本音色；样例只做一次特征提取并缓存，不训练模型。 */
+    @PostMapping("/voices") public Map<String, Object> importVoice(
+            @RequestHeader(value = "Authorization", required = false) String token,
+            @Valid @RequestBody VoiceImportRequest request) {
         user(token);
+        var body = new LinkedHashMap<String, Object>();
+        body.put("name", request.name());
+        body.put("display_name", request.displayName());
+        body.put("languages", request.languages());
+        body.put("prompt_text", request.promptText());
+        body.put("wav_base64", request.wavBase64());
+        return speech.importVoice(body);
+    }
+
+    @DeleteMapping("/voices/{name}") public Map<String, Object> deleteVoice(
+            @RequestHeader(value = "Authorization", required = false) String token,
+            @PathVariable String name) {
+        user(token);
+        speech.deleteVoice(name);
+        return Map.of("deleted", name);
+    }
+
+    @GetMapping("/voices") public Map<String, Object> voices(@RequestHeader(value = "Authorization", required = false) String token) {        user(token);
         List<Map<String, Object>> available = speech.voices().stream().map(voice -> {
             var value = new LinkedHashMap<String, Object>(voice);
             value.put("language", voice.getOrDefault("locale", ""));
