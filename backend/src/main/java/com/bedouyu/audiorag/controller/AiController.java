@@ -128,6 +128,22 @@ public class AiController {
         return continuousAudio.status(userId(authorization), queueId);
     }
 
+    /** 各段正文合并成一份，供前端查看与导出为单个文件。 */
+    @GetMapping("/api/v1/continuous-audio/{queueId}/script")
+    public Map<String, Object> continuousScript(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId) {
+        long user = userId(authorization);
+        var status = continuousAudio.status(user, queueId);
+        String script = continuousAudio.script(user, queueId);
+        return Map.of("queue_id", queueId,
+                "title", String.valueOf(status.getOrDefault("title", "")),
+                "mode", String.valueOf(status.getOrDefault("mode", "")),
+                "segments", ((Number) status.getOrDefault("total_segments", 0)).intValue(),
+                "characters", script.length(),
+                "script", script);
+    }
+
     @PostMapping("/api/v1/continuous-audio/{queueId}/refill")
     public Map<String, Object> refill(
             @RequestHeader(value = "Authorization", required = false) String authorization,

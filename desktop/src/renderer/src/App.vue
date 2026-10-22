@@ -60,6 +60,13 @@ async function playHistory(queue) {
     if (state.user && audio.state.project) await open(audio.state.project);
   });
 }
+async function createProject(topic) {
+  await safe(async () => {
+    const project = await api("/api/v1/projects", "POST", { topic });
+    await refreshProjects();
+    await open(project);
+  });
+}
 async function importSources() {
   const userId = state.user?.id;
   await safe(async () => {
@@ -207,8 +214,8 @@ onMounted(async () => {
       :projects="state.projects"
       :busy="state.busy"
       :audio="audio"
+      @create="createProject"
       @open="open"
-      @submit="submitAudio"
       @play="playHistory"
       @import="importSources"
       @delete="remove"

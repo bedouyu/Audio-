@@ -23,6 +23,8 @@ button {
   justify-content: center;
   gap: 7px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   border: 1px solid #dfe3e8;
   border-radius: 8px;
   background: #fff;

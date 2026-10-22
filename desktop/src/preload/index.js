@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("audioAgent", {
   upload: (args) => ipcRenderer.invoke("knowledge:upload", args),
   download: (args) => ipcRenderer.invoke("knowledge:download", args),
   openSource: (source) => ipcRenderer.invoke("source:open", source),
+  saveScript: (args) => ipcRenderer.invoke("script:save", args),
   stream: (id, body, token, onEvent) =>
     new Promise((resolve, reject) => {
       const listener = (_event, update) => {

@@ -10,6 +10,9 @@ const emit = defineEmits(["submit"]);
 const { state, safe, refreshProject } = props.workspace;
 const { state: playback, current, message } = props.audio;
 const resetTarget = ref(null);
+const scriptInfo = ref(null);
+const scriptOpen = ref(false);
+const scriptBusy = ref(false);
 const active = computed(() => playback.queue && playback.project?.id === state.project?.id);
 const records = computed(() => state.records.filter(item => item.record_type === "lesson" && item.metadata?.audio_url));
 const history = computed(() => playback.history.filter(item => item.project_id === state.project?.id));
@@ -25,6 +28,31 @@ async function recover(segment) {
 async function reset(reason) {
   const segment = resetTarget.value; resetTarget.value = null;
   if (segment) await safe(() => props.audio.reviewSegment(segment, reason));
+}
+async function loadFullScript() {
+  scriptBusy.value = true;
+  try {
+    scriptInfo.value = await props.audio.loadScript();
+    scriptOpen.value = !!scriptInfo.value;
+  } catch (error) { state.notice = error.message; }
+  finally { scriptBusy.value = false; }
+}
+async function exportFullScript() {
+  scriptBusy.value = true;
+  try {
+    const info = await props.audio.exportScript();
+    if (info) state.notice = "讲稿已导出为单个文件：" + (info.title || "音频讲稿");
+  } catch (error) { state.notice = error.message; }
+  finally { scriptBusy.value = false; }
+}
+async function exportRecord(record) {
+  try {
+    const saved = await window.audioAgent.saveScript({
+      filename: (record.title || "音频讲稿").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + ".md",
+      content: "# " + (record.title || "音频讲稿") + "\n\n" + record.content + "\n",
+    });
+    if (saved) state.notice = "文字稿已导出：" + (record.title || "");
+  } catch (error) { state.notice = error.message; }
 }
 </script>
 <template>
@@ -59,12 +87,27 @@ async function reset(reason) {
         <small>任务 {{ playback.queue.queue_id }} · {{ playback.queue.status }}</small>
       </details>
     </div>
+    <div v-if="active" class="card">
+      <div class="row spaced"><h3>完整讲稿</h3><span class="badge">{{ scriptInfo ? scriptInfo.characters + " 字" : (playback.queue.lessons?.length || 0) + " 段" }}</span></div>
+      <p class="muted">把各段正文合并成一份，导出后是一个文件，可直接保存或继续修改。</p>
+      <div class="row">
+        <button :disabled="scriptBusy" @click="loadFullScript">读取完整讲稿</button>
+        <button :disabled="scriptBusy" @click="exportFullScript">导出为文件</button>
+        <button v-if="scriptInfo" @click="scriptOpen = !scriptOpen">{{ scriptOpen ? "收起全文" : "展开全文" }}</button>
+      </div>
+      <pre v-if="scriptInfo && scriptOpen">{{ scriptInfo.script }}</pre>
+    </div>
     <div v-if="history.length" class="card"><h3>收听记录</h3>
       <AudioHistory :queues="history" :current-id="playback.queue?.queue_id" :busy="playback.restoring" @play="audio.openQueue($event, state.project)" />
     </div>
     <div class="card"><h3>这个空间的音频</h3>
       <div v-for="record in records" :key="record.id" class="record-audio">
-        <div class="row spaced"><p>{{ record.title }}</p><button @click="audio.playRecord(record, state.project)"><Play :size="14" /> 收听</button></div>
+        <div class="row spaced"><p>{{ record.title }}</p>
+          <div class="row">
+            <button @click="audio.playRecord(record, state.project)"><Play :size="14" /> 收听</button>
+            <button title="把这个文字稿导出为文件" @click="exportRecord(record)">导出</button>
+          </div>
+        </div>
         <details><summary>文字稿</summary><pre>{{ record.content }}</pre></details>
       </div>
       <p v-if="!records.length" class="muted">准备好的音频会保存在这里。也可以先打开资料，导入你想听的内容。</p>

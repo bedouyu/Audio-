@@ -156,6 +156,11 @@ public class ContinuousAudioService {
         return legacySnapshot(userId, queueId);
     }
 
+    /** 完整讲稿：把各段正文按顺序拼成一份，供查看与导出。 */
+    public String script(long userId, String queueId) {
+        return store.scriptForUser(userId, queueId);
+    }
+
     public Map<String, Object> refill(long userId, String queueId) {
         var current = store.statusIfPresent(userId, queueId);
         if (current.isEmpty()) {

@@ -187,6 +187,20 @@ ipcMain.handle(
     return true;
   },
 );
+ipcMain.handle("script:save", async (_event, { filename, content } = {}) => {
+  if (typeof content !== "string" || !content.trim())
+    throw new Error("讲稿为空，无法导出");
+  const selected = await dialog.showSaveDialog(window, {
+    defaultPath: basename(filename || "讲稿.md"),
+    filters: [
+      { name: "Markdown", extensions: ["md"] },
+      { name: "纯文本", extensions: ["txt"] },
+    ],
+  });
+  if (selected.canceled || !selected.filePath) return false;
+  await writeFile(selected.filePath, content, "utf8");
+  return true;
+});
 ipcMain.handle("source:open", async (_event, source) => {
   const parsed = new URL(source);
   if (!["https:", "http:"].includes(parsed.protocol))

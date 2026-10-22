@@ -351,6 +351,22 @@ export function useAudioCenter(workspace) {
       state.restoring = true; startPolling(); poll().then(() => { if (version === revision) restoreProgress(saved); });
     } catch { /* Old project snapshots are optional. */ }
   }
+  /** 完整讲稿：后端把各段正文按顺序合并，供查看与导出成一个文件。 */
+  async function loadScript(queueId) {
+    const id = queueId || state.queue?.queue_id;
+    if (!id) return null;
+    return api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/script");
+  }
+  /** 导出为单个 Markdown 文件；文件名取标题，附上来源与分段信息。 */
+  async function exportScript(queueId) {
+    const info = await loadScript(queueId);
+    if (!info?.script) return null;
+    const header = ["# " + (info.title || "音频讲稿"), "",
+      "> 分段：" + info.segments + " · 字数：" + info.characters + " · 任务：" + info.queue_id, ""].join("\n");
+    const filename = (info.title || "音频讲稿").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + ".md";
+    const saved = await window.audioAgent.saveScript({ filename, content: header + info.script + "\n" });
+    return saved ? info : null;
+  }
   onBeforeUnmount(() => {
     save(true); clear();
     if ("mediaSession" in navigator) {
@@ -360,5 +376,5 @@ export function useAudioCenter(workspace) {
   });
   return { state, current, source, total, message, bindPlayer, submit, poll, refill, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
-    openQueue, refreshHistory, save, clear };
+    openQueue, refreshHistory, save, clear, loadScript, exportScript };
 }
