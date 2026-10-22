@@ -63,16 +63,28 @@ class ContinuousAudioRevoiceTest {
 
         assertThatThrownBy(() -> store.revoice(1, fixture.queue().getId(), "voice-b", commandJson("voice-b")))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("还没有已完成的音频");
+                .hasMessageContaining("可以重念的片段");
     }
 
-    @Test void revoiceRefusesSegmentsWaitingForReview() {
+    @Test void revoiceCanDiscardSegmentsWhoseResultIsUnknown() {
         Fixture fixture = fixture();
-        fixture.segment().uncertain("合成结果未知");
+        fixture.segment().uncertain("上一次合成被拒绝");
+
+        var outcome = store.revoice(1, fixture.queue().getId(), "voice-b", commandJson("voice-b"));
+
+        // 用户明确要求换音色重念，未知结果被丢弃并重新排队。
+        assertThat(fixture.segment().getStatus()).isEqualTo("PENDING");
+        assertThat((List<?>) outcome.get("retired")).hasSize(1);
+        assertThat(outcome.get("segments")).isEqualTo(1);
+    }
+
+    @Test void revoiceIsRefusedWhileASegmentIsBeingSynthesized() {
+        Fixture fixture = fixture();
+        fixture.segment().claim("segment-token", Instant.now().plusSeconds(600));
 
         assertThatThrownBy(() -> store.revoice(1, fixture.queue().getId(), "voice-b", commandJson("voice-b")))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("等待核验");
+                .hasMessageContaining("正在合成");
     }
 
     private String commandJson(String voice) {

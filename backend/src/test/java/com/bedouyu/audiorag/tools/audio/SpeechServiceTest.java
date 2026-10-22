@@ -52,13 +52,19 @@ class SpeechServiceTest {
     }
 
     @Test
-    void bilingualSelectionRequiresBothLanguagesAndPreservesOptionalPrimaryVoice() {
-        assertEquals("", SpeechService.selectVoice(inventory(), "", "bilingual"));
-        assertEquals("English", SpeechService.selectVoice(inventory(), "English", "bilingual"));
-        assertThrows(ApiException.class, () -> SpeechService.selectVoice(
-                List.of(voice("English", "en-US", true)), "English", "bilingual"));
-        assertThrows(ApiException.class, () -> SpeechService.selectVoice(
-                List.of(voice("Chinese", "zh-CN", true)), "", "bilingual"));
+    void bilingualSelectionRequiresOneVoiceThatCoversBothLanguages() {
+        List<Map<String, Object>> inventory = List.of(voice("Chinese", "zh-CN", true),
+                voice("English", "en-US", true), voice("Both", "bilingual", true));
+        // 没有指定音色时直接选一个双语音色，不能返回空串让适配器去猜。
+        assertEquals("Both", SpeechService.selectVoice(inventory, "", "bilingual"));
+        assertEquals("Both", SpeechService.selectVoice(inventory, "Both", "bilingual"));
+        // 只支持一种语言的音色不能念双语内容（适配器会用同一个音色念整段）。
+        assertThrows(ApiException.class, () -> SpeechService.selectVoice(inventory, "English", "bilingual"));
+        assertThrows(ApiException.class, () -> SpeechService.selectVoice(inventory, "Chinese", "bilingual"));
+        // 完全没有双语音色时，明确说明缺什么。
+        ApiException missing = assertThrows(ApiException.class, () -> SpeechService.selectVoice(
+                List.of(voice("Chinese", "zh-CN", true), voice("English", "en-US", true)), "", "bilingual"));
+        assertTrue(missing.getMessage().contains("同时支持"));
     }
 
     @Test

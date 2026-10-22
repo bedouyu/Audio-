@@ -214,16 +214,18 @@ public class ContinuousAudioStore {
             throw conflict("正在生成内容，请等这批片段完成后再换音色");
         if ("CANCELLED".equals(queue.getStatus())) throw conflict("已取消的任务不能换音色");
         var values = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
-        if (values.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus()) || "NEEDS_REVIEW".equals(s.getStatus())))
-            throw conflict("有片段仍在合成或等待核验，请先处理后再换音色");
-        var ready = values.stream().filter(s -> "READY".equals(s.getStatus())).toList();
-        if (ready.isEmpty()) throw conflict("还没有已完成的音频，先等第一段生成完成");
+        if (values.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus())))
+            throw conflict("有片段正在合成，请等它结束或先核验结果");
+        // 已完成的片段直接换音色；结果显示未知的片段也允许重念——那是用户明确要求丢弃这次结果。
+        var rearmable = values.stream()
+                .filter(s -> "READY".equals(s.getStatus()) || "NEEDS_REVIEW".equals(s.getStatus())).toList();
+        if (rearmable.isEmpty()) throw conflict("还没有可以重念的片段，先等第一段生成完成");
         List<String> retired = new ArrayList<>();
-        for (var segment : ready) {
+        for (var segment : rearmable) {
             String nextAudioId = UUID.randomUUID().toString();
             audit(segment, Map.of("action", "REVOICE", "user_id", userId, "voice", voice,
-                    "previous_audio_id", segment.getAudioId(), "new_audio_id", nextAudioId,
-                    "time", Instant.now().toString()));
+                    "previous_audio_id", segment.getAudioId(), "previous_status", segment.getStatus(),
+                    "new_audio_id", nextAudioId, "time", Instant.now().toString()));
             // 换音色是同一个条目的重制：删掉旧记录，重新合成后再写回一条，避免历史里出现重复条目。
             if (segment.getRecordId() != null) records.deleteProjectRecord(segment.getRecordId());
             retired.add(segment.getAudioId());
@@ -232,7 +234,7 @@ public class ContinuousAudioStore {
         queue.revoice(commandJson);
         queue.clearError();
         refreshQueueStatus(queue);
-        return Map.of("segments", ready.size(), "retired", List.copyOf(retired));
+        return Map.of("segments", rearmable.size(), "retired", List.copyOf(retired));
     }
 
     public Optional<Map<String, Object>> statusIfPresent(long userId, String queueId) {

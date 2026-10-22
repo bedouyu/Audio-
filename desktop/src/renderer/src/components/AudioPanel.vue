@@ -25,13 +25,13 @@ const revoiceOptions = computed(() => (playback.voices || []).filter((voice) => 
   const supported = Array.isArray(voice.languages) ? voice.languages : [String(voice.locale || "").toLowerCase()];
   return contentLanguages.value.some(language => supported.includes(language));
 }));
-// 只要这段音频已经完成过，就显示换音色入口；整条队列还在生成时按钮先禁用。
-// 没有 queue_id 的旧记录（历史归档音频）无法定位队列，直接不显示以免点了没反应。
+// 只要有脚本片段就显示换音色入口：已完成的直接换，上次失败的也能从这里重念。
+// 没有 queue_id 的旧归档记录无法定位队列，直接不显示以免点了没反应。
 const canRevoice = computed(() => active.value && !!playback.queue?.queue_id
   && playback.queue?.status !== "CANCELLED"
-  && (playback.queue?.lessons?.length || 0) > 0 && revoiceOptions.value.length > 0);
-const revoiceBlocked = computed(() => playback.queue?.status !== "COMPLETE"
-  && ["PREPARING", "GENERATING"].includes(playback.queue?.status));
+  && (playback.queue?.total_segments || 0) > 0 && revoiceOptions.value.length > 0);
+const revoiceBlocked = computed(() => ["PREPARING", "GENERATING"].includes(playback.queue?.status));
+const revoiceStartsOver = computed(() => (playback.queue?.lessons?.length || 0) === 0);
 // 后端可能重启过，登录时读到的音色列表会变旧；进入音频页时再刷一次。
 onMounted(() => props.audio.refreshVoices?.());
 async function confirmRevoice() {
@@ -109,6 +109,7 @@ async function exportRecord(record) {
       </div>
       <p v-if="canRevoice" class="muted">
         <template v-if="revoiceBlocked">正在生成内容，等这批片段完成后再换音色。</template>
+        <template v-else-if="revoiceStartsOver">这段音频上次没有成功生成，换音色会从头重念全部片段。</template>
         <template v-else>讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</template>
       </p>
       <details v-if="current?.script"><summary>查看当前文字稿</summary><pre>{{ current.script }}</pre></details>

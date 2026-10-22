@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -114,7 +115,7 @@ final class CosyVoiceClient {
                     .contentLength(body.length).body(body)
                     .exchange((request, response) -> {
                         if (!response.getStatusCode().is2xxSuccessful())
-                            throw serviceFailure(response.getStatusCode().value());
+                            throw synthesisRejected(response);
                         long declared = response.getHeaders().getContentLength();
                         if (declared > MAX_AUDIO_BYTES) throw new IOException("CosyVoice 音频超过单次大小限制");
                         try (var input = response.getBody(); var output = Files.newOutputStream(target)) {
@@ -192,6 +193,25 @@ final class CosyVoiceClient {
                 detail.isBlank() ? action + "失败：样例不符合要求" : detail);
         return new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
                 "本地语音服务暂时不可用（HTTP " + status + "），" + action + "未完成");
+    }
+
+    /** 适配器会说明拒绝原因（例如音色不支持该语言），原样带给用户，而不是只留一个状态码。 */
+    private static ApiException synthesisRejected(ClientHttpResponse response) throws IOException {
+        String body = "";
+        try (var input = response.getBody()) {
+            body = new String(input.readNBytes(4096), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException unreadable) {
+            // 读不到正文时退回通用提示
+        }
+        String detail = "";
+        try {
+            detail = JSON.readTree(body).path("detail").asText("");
+        } catch (RuntimeException notJson) {
+            // 正文不是 JSON
+        }
+        int status = response.getStatusCode().value();
+        if (detail.isBlank()) return serviceFailure(status);
+        return new ApiException(status == 409 ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST, detail);
     }
 
     private static ApiException serviceFailure(int status) {

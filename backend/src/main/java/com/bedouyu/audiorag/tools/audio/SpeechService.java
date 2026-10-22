@@ -132,12 +132,22 @@ public class SpeechService {
                     .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "所选音色未安装或不可用：" + selection));
         }
         if ("bilingual".equals(locale)) {
-            requireVoice(enabled, "zh");
-            requireVoice(enabled, "en");
-            if (selected != null && !matchesLanguage(selected, "zh") && !matchesLanguage(selected, "en")) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "中英双语内容需要中文或英文音色，并自动切换另一种语言的音色");
+            // CosyVoice 用同一个音色念整段中英混排文本，所以这个音色必须同时支持中英两种语言；
+            // 只支持其中一种的音色在这里就拒绝，不要等适配器返回一句看不懂的报错。
+            List<Map<String, Object>> both = enabled.stream()
+                    .filter(voice -> matchesLanguage(voice, "zh") && matchesLanguage(voice, "en")).toList();
+            if (both.isEmpty()) {
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "中英双语内容需要一个同时支持中文和英文的音色，当前没有可用音色");
             }
-            return selection;
+            if (selected != null) {
+                if (!matchesLanguage(selected, "zh") || !matchesLanguage(selected, "en")) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                            "所选音色不支持中英双语，请改选同时支持中文和英文的音色，或使用自动选择");
+                }
+                return selection;
+            }
+            return String.valueOf(both.get(0).get("name"));
         }
         if ("auto".equals(locale)) {
             if (selected != null) return selection;
