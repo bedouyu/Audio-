@@ -21,6 +21,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.bedouyu.audiorag.tools.research.WebSearchService;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -144,9 +145,54 @@ public class AudioAgent {
 
     public CoursePlan createCourse(long userId, CourseCommand command) {
         validateProject(userId, command.projectId());
+        // 开放式生成走多智能体（研究→写稿→复核）；忠实改写、接续与原文朗读仍走单次生成，
+        // 那几类要做的是“按给定文本变换”，不是开放式创作，也不该把长原文塞进多轮上下文。
+        if (orchestrator.available() && command.sourceText() == null
+                && (command.contextScript() == null || command.contextScript().isBlank()))
+            return createCourseViaAgent(userId, command);
         var content = prepareContent(command.projectId(), command.topic(), command.instruction(), command.audience(),
                 command.durationMinutes(), command.sourceText(), command.sourceTitle(), command.contextScript(), true);
         return new CoursePlan(content.title(), content.script(), content.citations(), content.pointId());
+    }
+
+    /** 用真实多智能体产出讲稿；没有可朗读的草稿就明确失败，不退回模板或占位内容。 */
+    private CoursePlan createCourseViaAgent(long userId, CourseCommand command) {
+        Map<String, Object> result;
+        try {
+            result = orchestrator.chat(userId, new ChatCommand(agentTask(command), null, command.projectId(),
+                    null, null, java.util.Set.of("SCRIPT_DRAFT")), null, ignored -> { });
+        } catch (RuntimeException error) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "多智能体内容准备失败，未生成也未合成音频：" + (error.getMessage() == null ? "未知错误" : error.getMessage()));
+        }
+        for (var item : (List<?>) result.getOrDefault("artifacts", List.of())) {
+            if (!(item instanceof Map<?, ?> artifact)) continue;
+            if (!"SCRIPT_DRAFT".equals(artifact.get("kind")) || !"DRAFT".equals(artifact.get("status"))) continue;
+            String script = String.valueOf(artifact.get("content"));
+            if (script.isBlank() || "null".equals(script)) continue;
+            var citations = new ArrayList<Map<String, Object>>();
+            if (artifact.get("citations") instanceof List<?> values)
+                for (var citation : values)
+                    if (citation instanceof Map<?, ?> fields) {
+                        var copy = new LinkedHashMap<String, Object>();
+                        fields.forEach((key, value) -> copy.put(String.valueOf(key), value));
+                        citations.add(copy);
+                    }
+            return new CoursePlan(title(command.topic()), script, List.copyOf(citations), 0);
+        }
+        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                "多智能体未产出可朗读的讲稿草稿，未生成音频；请检查是否被复核拒绝或超出调用预算");
+    }
+
+    /** 把音频请求翻译成主控能执行的任务：保留用户原话，只补服务端已知的时长与受众。 */
+    private String agentTask(CourseCommand command) {
+        String instruction = command.instruction() == null || command.instruction().isBlank()
+                ? command.topic() : command.instruction();
+        StringBuilder task = new StringBuilder(instruction);
+        task.append("\n\n[服务端补充] 目标时长 ").append(command.durationMinutes()).append(" 分钟");
+        if (command.audience() != null && !command.audience().isBlank()) task.append("；受众：").append(command.audience());
+        task.append("。请产出可直接朗读的完整正文，并交给复核后再交付。");
+        return task.toString();
     }
 
     private PreparedContent prepareContent(long projectId, String topic, String instruction, String audience,
@@ -228,6 +274,7 @@ public class AudioAgent {
                 "agent_runtime", orchestrator.available() ? "native-function-calling"
                         : llm.configured() ? "bounded-retrieval" : "offline-retrieval",
                 "multi_agent", orchestrator.available(), "instruction_audio", true, "exact_source_reading", true,
+                "instruction_audio_runtime", orchestrator.available() ? "multi-agent" : "single-shot",
                 "fresh_news", webSearch.enabled() ? "live-dated-evidence-required" : "unavailable");
     }
 

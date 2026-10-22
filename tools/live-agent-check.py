@@ -126,6 +126,55 @@ def run_case(token, minutes, message, label):
     return {"label": label, "minutes": minutes, "deviation": deviation}
 
 
+def run_audio_case(token, minutes, instruction, label):
+    """自然语言音频入口：验证它现在真的经过多智能体，而不是单次生成。"""
+    status, project = post_json("/api/v1/projects", {"topic": f"audio-{label}-{uuid.uuid4().hex[:6]}"}, token)
+    project_id = json.loads(project)["id"]
+    body = {"instruction": instruction, "request_id": str(uuid.uuid4()), "project_id": project_id}
+    started = time.time()
+    code, payload = post_json("/api/v1/audio/requests", body, token)
+    accepted = json.loads(payload)
+    queue_id = accepted.get("queue_id")
+    snapshot = {}
+    deadline = time.time() + 420
+    while time.time() < deadline:
+        try:
+            snapshot = get_json(f"/api/v1/continuous-audio/{queue_id}", token)
+        except Exception:  # noqa: BLE001 - queue may not be readable yet
+            snapshot = {}
+        if snapshot.get("status") in ("COMPLETE", "FAILED", "NEEDS_REVIEW", "CANCELLED"):
+            break
+        time.sleep(4)
+    elapsed = time.time() - started
+    artifacts = get_json(f"/api/v1/projects/{project_id}/agent/artifacts", token)["artifacts"]
+    kinds = sorted({item["kind"] for item in artifacts})
+    lessons = snapshot.get("lessons") or []
+    script = lessons[0].get("script", "") if lessons else ""
+    if not script:
+        print(f"[{label}] status={snapshot.get('status')} no script; errors={snapshot.get('errors')}; artifacts={kinds}")
+        return None
+    cjk, words, seconds, old_seconds = estimate(script)
+    target = minutes * 60.0
+    deviation = (seconds - target) / target
+    print(json.dumps({
+        "label": label,
+        "requested_minutes": minutes,
+        "http": code,
+        "queue_status": snapshot.get("status"),
+        "wall_seconds": round(elapsed, 1),
+        "segments": len(lessons),
+        "audio_urls": sum(1 for item in lessons if item.get("audio_url")),
+        "characters": len(script),
+        "estimated_minutes": round(seconds / 60, 2),
+        "deviation_percent": round(deviation * 100, 1),
+        "old_260_rule_minutes": round(old_seconds / 60, 2),
+        "agent_artifacts": kinds,
+        "used_agent": "SCRIPT_DRAFT" in kinds,
+        "errors": snapshot.get("errors"),
+    }, ensure_ascii=False, indent=2))
+    return {"label": label, "minutes": minutes, "deviation": deviation}
+
+
 def main():
     name = "live" + uuid.uuid4().hex[:10]
     status, registered = post_json("/api/v1/auth/register", {"username": name, "password": "password1"})
@@ -145,13 +194,23 @@ def main():
         except Exception as error:  # noqa: BLE001 - report and continue
             print(f"[{label}] FAILED: {type(error).__name__}: {error}")
 
+    audio_cases = [
+        (3, "讲一段 3 分钟的睡前故事，主题是小熊第一次独自去森林", "audio-zh-3min"),
+    ]
+    for minutes, instruction, label in audio_cases:
+        try:
+            outcome = run_audio_case(token, minutes, instruction, label)
+            if outcome:
+                results.append(outcome)
+        except Exception as error:  # noqa: BLE001 - report and continue
+            print(f"[{label}] FAILED: {type(error).__name__}: {error}")
+
     if results:
         print("\nSUMMARY")
         for item in results:
             print(f"  {item['label']}: target {item['minutes']}min |deviation|={abs(item['deviation'])*100:.1f}%")
         print(f"  mean |deviation| = {statistics.mean(abs(r['deviation']) for r in results)*100:.1f}%")
     return 0 if results else 1
-
 
 if __name__ == "__main__":
     sys.exit(main())
