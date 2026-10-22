@@ -283,6 +283,17 @@ class VoiceImportTests(unittest.TestCase):
             registered = engine.model.add_zero_shot_spk.call_args[0]
             self.assertIn("<|endofprompt|>", registered[0])
 
+    def test_written_manifest_keeps_the_compact_style(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            service, _ = self.service(root, self.manifest(root))
+            service.import_voice(self.payload())
+            text = (root / "voices.json").read_text(encoding="utf-8")
+            # languages 保持单行，避免每次录入都把整份配置重新排版。
+            self.assertIn('"languages": ["zh"]', text)
+            self.assertIn('"prompt_wav": "asset/voices/my-voice.wav"', text)
+            self.assertNotIn('\n      "zh",\n', text)
+
     def test_import_writes_normalized_sample_registers_speaker_and_updates_manifest(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()

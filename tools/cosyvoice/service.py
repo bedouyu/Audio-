@@ -42,6 +42,26 @@ def prompt_with_marker(transcript: str) -> str:
     return f"{PROMPT_PREFIX}{PROMPT_MARKER}{text}"
 
 
+def dump_voices(data: dict) -> str:
+    """写回 voices.json 时保持原有紧凑格式，避免每次录入都产生整文件格式差异。"""
+    entries = data.get("voices", [])
+    lines = ["{", '  "voices": [']
+    for index, entry in enumerate(entries):
+        lines.append("    {")
+        keys = list(entry)
+        for position, key in enumerate(keys):
+            value = entry[key]
+            comma = "," if position < len(keys) - 1 else ""
+            if isinstance(value, list):
+                rendered = "[" + ", ".join(json.dumps(item, ensure_ascii=False) for item in value) + "]"
+            else:
+                rendered = json.dumps(value, ensure_ascii=False)
+            lines.append(f'      "{key}": {rendered}{comma}')
+        lines.append("    }" + ("," if index < len(entries) - 1 else ""))
+    lines.extend(["  ]", "}"])
+    return "\n".join(lines) + "\n"
+
+
 class ServiceError(Exception):
     def __init__(self, status: int, detail: str):
         super().__init__(detail)
@@ -332,7 +352,7 @@ class AdapterService:
                         "prompt_wav": target.relative_to(self.repo_root).as_posix(),
                         "prompt_text": prompt_text, "enabled": True})
         data["voices"] = entries
-        self.voices_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.voices_file.write_text(dump_voices(data), encoding="utf-8")
         LOGGER.info("Imported voice %s from %s", name, target)
         return voice.public()
 
@@ -351,7 +371,7 @@ class AdapterService:
         if not kept:
             raise ServiceError(409, "至少要保留一个音色")
         data["voices"] = kept
-        self.voices_file.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.voices_file.write_text(dump_voices(data), encoding="utf-8")
         voice.prompt_wav.unlink(missing_ok=True)
         engine.model.frontend.spk2info.pop(name, None)
         engine.voices = tuple(item for item in engine.voices if item.name != name)
