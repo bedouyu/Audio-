@@ -8,8 +8,14 @@ package com.bedouyu.audiorag.common;
  * 测量密度——中文按非空白字符，英文按词——再反推每分钟字符数，供分段与校验共用。
  */
 public final class SpeechTiming {
-    /** 中文正常语速，非空白字符/分钟。 */
-    public static final double CJK_CHARACTERS_PER_MINUTE = 260.0;
+    /**
+     * 中文正常语速，非空白字符/分钟。
+     *
+     * <p>实测值：用本机已合成的 12 段真实 WAV 与其讲稿反算，汇总 193.0、逐段均值 192.4、
+     * 长段落集中在 186—200（见 tools/measure-speech-rate.py）。旧的 260 只是先验猜测，
+     * 会让"3 分钟"实际播到约 4 分钟。取 195 略高于实测，避免把正文压得过短。
+     */
+    public static final double CJK_CHARACTERS_PER_MINUTE = 195.0;
     /** 英文正常语速，词/分钟。 */
     public static final double LATIN_WORDS_PER_MINUTE = 150.0;
 

@@ -91,7 +91,8 @@ public record AudioIntent(String instruction, String language, int durationMinut
     public String lengthHint() {
         return switch (language) {
             case "en" -> "约 " + Math.round(durationMinutes * SpeechTiming.LATIN_WORDS_PER_MINUTE) + " 个英文单词";
-            case "bilingual" -> "中文约 " + perMinute(130) + " 字 + 英文约 " + perMinute(75) + " 词";
+            case "bilingual" -> "中文约 " + perMinute(SpeechTiming.CJK_CHARACTERS_PER_MINUTE / 2)
+                    + " 字 + 英文约 " + perMinute(SpeechTiming.LATIN_WORDS_PER_MINUTE / 2) + " 词";
             default -> "约 " + Math.round(durationMinutes * SpeechTiming.CJK_CHARACTERS_PER_MINUTE) + " 个汉字";
         };
     }
@@ -100,7 +101,8 @@ public record AudioIntent(String instruction, String language, int durationMinut
     public String lengthFloor() {
         return switch (language) {
             case "en" -> Math.round(durationMinutes * SpeechTiming.LATIN_WORDS_PER_MINUTE * 0.9) + " 个英文单词";
-            case "bilingual" -> perMinute(120) + " 字加 " + perMinute(68) + " 词";
+            case "bilingual" -> perMinute(SpeechTiming.CJK_CHARACTERS_PER_MINUTE * 0.45)
+                    + " 字加 " + perMinute(SpeechTiming.LATIN_WORDS_PER_MINUTE * 0.45) + " 词";
             default -> Math.round(durationMinutes * SpeechTiming.CJK_CHARACTERS_PER_MINUTE * 0.9) + " 个汉字";
         };
     }

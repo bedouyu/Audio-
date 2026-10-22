@@ -7,6 +7,6 @@ import java.util.Set;
 public class ScriptWriterAgent implements SpecialistAgent {
     public AgentProfile profile() {
         return new AgentProfile("script_writer", "音频编写", "script-writer",
-                Set.of("read_artifact", "estimate_duration"), "SCRIPT_DRAFT", 6);
+                Set.of("read_artifact", "estimate_duration"), "SCRIPT_DRAFT", 8);
     }
 }

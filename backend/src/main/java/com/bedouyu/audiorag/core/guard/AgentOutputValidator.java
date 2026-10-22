@@ -40,6 +40,9 @@ public class AgentOutputValidator {
         if ("script_writer".equals(profile.id()) && context.readableArtifacts != null
                 && !context.readableArtifacts.isEmpty() && !successfulTools.contains("read_artifact"))
             throw new IllegalArgumentException("讲稿编写必须读取传入的资料产物");
+        // 篇幅是用户能直接感知的硬要求；不实际测量就交付，等于把估计误差留给用户。
+        if ("script_writer".equals(profile.id()) && !successfulTools.contains("estimate_duration"))
+            throw new IllegalArgumentException("讲稿编写必须先用 estimate_duration 测量篇幅（传 target_minutes），偏差超过 20% 时先改写再交付");
         if ("LEARNING_PLAN".equals(profile.artifactKind())) validatePlan(content);
         if ("REVIEW_REPORT".equals(profile.artifactKind())) {
             var root = json.readTree(content);
@@ -55,6 +58,11 @@ public class AgentOutputValidator {
             for (String required : context.taskSpecification.requiredArtifacts())
                 if (outputs.stream().noneMatch(item -> required.equals(item.get("kind"))))
                     throw new IllegalArgumentException("最低任务规格未完成，缺少真实产物：" + required + "；不能只用文字声称完成");
+            // 复核是唯一能发现篇幅与事实问题的环节；产出讲稿却没有复核报告，不算完成。
+            boolean scripted = outputs.stream().anyMatch(item -> "SCRIPT_DRAFT".equals(item.get("kind")));
+            boolean reviewed = outputs.stream().anyMatch(item -> "REVIEW_REPORT".equals(item.get("kind")));
+            if (scripted && !reviewed)
+                throw new IllegalArgumentException("产出了讲稿就必须先复核：请委派 review_agent 阅读该讲稿并调用 validate_script，拿到复核报告后再交付");
         }
     }
     public void validatePlan(String content) {

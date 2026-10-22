@@ -15,7 +15,7 @@ class AudioIntentHintTest {
         assertThat(intent.durationMinutes()).isEqualTo(10);
         assertThat(intent.language()).isEqualTo("zh");
         assertThat(intent.freshEvidenceRequired()).isTrue();
-        assertThat(intent.lengthHint()).isEqualTo("约 2600 个汉字");
+        assertThat(intent.lengthHint()).isEqualTo("约 1950 个汉字");
         assertThat(intent.agentHint())
                 .contains("目标时长≈10 分钟")
                 .contains("需要本次实时证据=是")
@@ -35,7 +35,7 @@ class AudioIntentHintTest {
         var intent = AudioIntent.resolve("用中英双语讲一段 10 分钟的睡前故事", 5, today);
 
         assertThat(intent.language()).isEqualTo("bilingual");
-        assertThat(intent.lengthHint()).isEqualTo("中文约 1300 字 + 英文约 750 词");
+        assertThat(intent.lengthHint()).isEqualTo("中文约 975 字 + 英文约 750 词");
     }
 
     @Test void explicitMinutesOnlyAppliesWhenTheUserWroteOne() {

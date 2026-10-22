@@ -46,6 +46,22 @@ class CompletionSemanticsTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test void aScriptWithoutReviewIsNotACompletedTask() {
+        var store = mock(AgentArtifactStore.class);
+        var validator = new AgentOutputValidator(json, store);
+        var context = context("supervisor");
+        var profile = new AgentProfile("supervisor", "主控", "", Set.of(), "", 3);
+
+        when(store.forRun(1, 7, "run")).thenReturn(List.of(Map.of("kind", "SCRIPT_DRAFT")));
+        assertThatThrownBy(() -> validator.validate(profile, "讲个睡前故事", "讲稿已备好", Set.of(), context))
+                .hasMessageContaining("必须先复核");
+
+        when(store.forRun(1, 7, "run")).thenReturn(List.of(
+                Map.of("kind", "SCRIPT_DRAFT"), Map.of("kind", "REVIEW_REPORT")));
+        assertThatCode(() -> validator.validate(profile, "讲个睡前故事", "讲稿已复核", Set.of(), context))
+                .doesNotThrowAnyException();
+    }
+
     private ReActLoopEngine engine(String status) {
         var model = mock(AgentModelGateway.class);
         var first = new AgentModelReply("", "", List.of(new FunctionCall("call_1", "knowledge_search", "{}")), "tool_calls");

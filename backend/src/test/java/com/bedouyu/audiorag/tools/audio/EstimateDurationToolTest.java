@@ -12,13 +12,13 @@ class EstimateDurationToolTest {
     private final ObjectMapper json = new ObjectMapper();
 
     @Test void chineseOutlineHitsTheRequestedMinutesAndReportsTheTargetLength() throws Exception {
-        var result = run("字".repeat(2600), 10);
+        var result = run("字".repeat(1950), 10);
 
         assertThat(result).containsEntry("status", "OK").containsEntry("target_minutes", 10);
         assertThat(result).containsEntry("within_tolerance", true);
         assertThat(number(result, "estimated_seconds")).isEqualTo(600L);
-        assertThat(number(result, "target_characters")).isEqualTo(2600L);
-        assertThat(number(result, "characters_per_minute")).isEqualTo(260L);
+        assertThat(number(result, "target_characters")).isEqualTo(1950L);
+        assertThat(number(result, "characters_per_minute")).isEqualTo(195L);
     }
 
     @Test void englishOutlineIsMeasuredInWordsSoTheSameWordCountIsNotFiveTimesTooLong() throws Exception {
@@ -34,7 +34,7 @@ class EstimateDurationToolTest {
         var result = run("字".repeat(100), 10);
 
         assertThat(result).containsEntry("within_tolerance", false);
-        assertThat(number(result, "target_characters")).isEqualTo(2600L);
+        assertThat(number(result, "target_characters")).isEqualTo(1950L);
         assertThat(((Number) result.get("deviation_ratio")).doubleValue()).isLessThan(-0.9);
     }
 

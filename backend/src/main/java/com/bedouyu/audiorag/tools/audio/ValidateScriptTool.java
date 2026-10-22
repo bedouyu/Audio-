@@ -57,7 +57,8 @@ public class ValidateScriptTool implements FunctionTool {
             double targetSeconds = targetMinutes * 60.0;
             deviation = (estimatedSeconds - targetSeconds) / targetSeconds;
             // 单篇 24000 字符写不满更长时长，这种情况只报告不判错。
-            if (Math.abs(deviation) > 0.25 && raw.length() < 23000) {
+            // 门槛与提示词里的「偏差超过 20% 先调整」保持一致，否则 24% 的偏短会被放过。
+            if (Math.abs(deviation) > 0.20 && raw.length() < 23000) {
                 // 给出具体字数而不是“扩写一点”：实测模糊建议会让修订稿过冲（794→1071 字）。
                 long targetCharacters = SpeechTiming.targetCharacters(raw, targetMinutes);
                 issues.add(String.format("讲稿估算约 %.1f 分钟（%d 字符），目标 %d 分钟约 %d 字符；相差 %d%%，请%s到 %d—%d 字符再复核",

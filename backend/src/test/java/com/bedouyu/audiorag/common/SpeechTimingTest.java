@@ -7,15 +7,16 @@ import static org.assertj.core.api.Assertions.within;
 
 class SpeechTimingTest {
     @Test void chineseAndEnglishUseTheirOwnSpeakingRate() {
-        assertThat(SpeechTiming.charactersPerMinute("你好世界")).isCloseTo(260.0, within(0.01));
-        // 2 词 / 每分钟 150 词 = 0.8 秒；旧代码会把它算成 10/260 分钟（约 2.3 秒）。
+        // 195 字/分钟来自 12 段真实 WAV 的实测反算，不是先验猜测。
+        assertThat(SpeechTiming.charactersPerMinute("你好世界")).isCloseTo(195.0, within(0.01));
+        // 2 词 / 每分钟 150 词 = 0.8 秒；旧的字符口径会把它算成 10/260 分钟（约 2.3 秒）。
         assertThat(SpeechTiming.estimatedSeconds("hello world")).isCloseTo(0.8, within(0.001));
         assertThat(SpeechTiming.charactersPerMinute("hello world")).isCloseTo(750.0, within(0.01));
     }
 
     @Test void englishIsNotMeasuredWithTheChineseConstantAnymore() {
         String english = "word ".repeat(150).trim();
-        String chinese = "字".repeat(260);
+        String chinese = "字".repeat(195);
 
         assertThat(SpeechTiming.estimatedSeconds(english)).isCloseTo(60.0, within(0.5));
         assertThat(SpeechTiming.estimatedSeconds(chinese)).isCloseTo(60.0, within(0.5));
@@ -41,20 +42,20 @@ class SpeechTimingTest {
         assertThat(SpeechTiming.cjkCharacters(mixed)).isEqualTo(2);
         assertThat(SpeechTiming.latinWords(mixed)).isEqualTo(2);
         assertThat(SpeechTiming.estimatedSeconds(mixed))
-                .isCloseTo(2 * 60.0 / 260 + 2 * 60.0 / 150, within(0.001));
+                .isCloseTo(2 * 60.0 / 195 + 2 * 60.0 / 150, within(0.001));
     }
 
     @Test void targetCharactersFollowsTheTextLanguage() {
-        assertThat(SpeechTiming.targetCharacters("你好世界", 10)).isEqualTo(2600);
+        assertThat(SpeechTiming.targetCharacters("你好世界", 10)).isEqualTo(1950);
         assertThat(SpeechTiming.targetCharacters("hello world", 10)).isEqualTo(7500);
-        assertThat(SpeechTiming.targetCharacters("", 10)).isEqualTo(2600);
+        assertThat(SpeechTiming.targetCharacters("", 10)).isEqualTo(1950);
         assertThat(SpeechTiming.targetCharacters("你好", 0)).isZero();
     }
 
     @Test void blankInputIsHandledWithoutDividingByZero() {
         assertThat(SpeechTiming.estimatedSeconds("")).isZero();
         assertThat(SpeechTiming.estimatedSeconds(null)).isZero();
-        assertThat(SpeechTiming.charactersPerMinute("   ")).isEqualTo(260.0);
+        assertThat(SpeechTiming.charactersPerMinute("   ")).isEqualTo(195.0);
         assertThat(SpeechTiming.latinWords(null)).isZero();
     }
 }

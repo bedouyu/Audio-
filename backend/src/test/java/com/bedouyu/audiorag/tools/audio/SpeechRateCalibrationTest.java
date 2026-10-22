@@ -11,8 +11,8 @@ class SpeechRateCalibrationTest {
         var calibration = new SpeechRateCalibration();
         assertThat(calibration.scale()).isEqualTo(1.0);
 
-        // 2600 字预计 10 分钟（600 秒），实测 720 秒 → 比例 1.2。
-        calibration.learn(chinese(2600), 720);
+        // 1950 字预计 10 分钟（600 秒），实测 720 秒 → 比例 1.2。
+        calibration.learn(chinese(1950), 720);
 
         assertThat(calibration.samples()).isEqualTo(1);
         assertThat(calibration.scale()).isBetween(1.05, 1.25);
@@ -29,9 +29,9 @@ class SpeechRateCalibrationTest {
         var calibration = new SpeechRateCalibration();
 
         calibration.learn("太短", 3);                    // 预计时长过短，不可信
-        calibration.learn(chinese(2600), 0.2);            // 比例远低于下限
-        calibration.learn(chinese(2600), 30_000);         // 比例远高于上限
-        calibration.learn(chinese(2600), Double.NaN);
+        calibration.learn(chinese(1950), 0.2);            // 比例远低于下限
+        calibration.learn(chinese(1950), 30_000);         // 比例远高于上限
+        calibration.learn(chinese(1950), Double.NaN);
 
         assertThat(calibration.samples()).isZero();
         assertThat(calibration.scale()).isEqualTo(1.0);
@@ -39,7 +39,7 @@ class SpeechRateCalibrationTest {
 
     @Test void repeatedSamplesConvergeOnTheMeasuredRate() {
         var calibration = new SpeechRateCalibration();
-        for (int index = 0; index < 12; index++) calibration.learn(chinese(2600), 720);
+        for (int index = 0; index < 12; index++) calibration.learn(chinese(1950), 720);
 
         assertThat(calibration.scale()).isCloseTo(1.2, org.assertj.core.api.Assertions.within(0.01));
         calibration.reset();

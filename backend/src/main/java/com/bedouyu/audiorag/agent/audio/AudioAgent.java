@@ -34,6 +34,7 @@ import org.springframework.stereotype.Service;
 /** Instruction-driven audio; explicit learning plans are one optional capability. */
 @Service
 public class AudioAgent {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AudioAgent.class);
     private final QdrantService qdrant;
     private final AudioRagRepository repository;
     private final WebSearchService webSearch;
@@ -154,8 +155,15 @@ public class AudioAgent {
         // 开放式生成走多智能体（研究→写稿→复核）；忠实改写、接续与原文朗读仍走单次生成，
         // 那几类要做的是“按给定文本变换”，不是开放式创作，也不该把长原文塞进多轮上下文。
         if (orchestrator.available() && command.sourceText() == null
-                && (command.contextScript() == null || command.contextScript().isBlank()))
-            return createCourseViaAgent(userId, command);
+                && (command.contextScript() == null || command.contextScript().isBlank())) {
+            try {
+                return createCourseViaAgent(userId, command);
+            } catch (RuntimeException error) {
+                // 多智能体失败（轮数/预算/网络）不该让用户拿不到音频：
+                // 退回单次生成，并把原因写进日志，便于分辨哪些请求其实没走成 agent。
+                log.warn("多智能体内容准备失败，退回单次生成：{}", error.getMessage());
+            }
+        }
         var content = prepareContent(command.projectId(), command.topic(), command.instruction(), command.audience(),
                 command.durationMinutes(), command.sourceText(), command.sourceTitle(), command.contextScript(), true);
         return new CoursePlan(content.title(), content.script(), content.citations(), content.pointId());
@@ -198,17 +206,22 @@ public class AudioAgent {
         return new CoursePlan(title(command.topic()), script, List.copyOf(citations), 0);
     }
 
-    /** 取本次调用中新产生、且仍是草稿的讲稿；列表按创建时间倒序，第一条即最新。 */
+    /**
+     * 取本次调用中新产生的讲稿。优先未处理的草稿；预算在修订途中耗尽时，上一版被取代的
+     * 讲稿仍比彻底失败有用——它至少是完整写出来的正文。
+     */
     private Map<?, ?> draftIn(List<?> items, Set<String> before) {
+        Map<?, ?> superseded = null;
         for (var item : items) {
             if (!(item instanceof Map<?, ?> artifact)) continue;
-            if (!"SCRIPT_DRAFT".equals(artifact.get("kind")) || !"DRAFT".equals(artifact.get("status"))) continue;
+            if (!"SCRIPT_DRAFT".equals(artifact.get("kind"))) continue;
             if (before.contains(String.valueOf(artifact.get("id")))) continue;
             String script = String.valueOf(artifact.get("content"));
             if (script.isBlank() || "null".equals(script)) continue;
-            return artifact;
+            if ("DRAFT".equals(artifact.get("status"))) return artifact;
+            if (superseded == null && "SUPERSEDED".equals(artifact.get("status"))) superseded = artifact;
         }
-        return null;
+        return superseded;
     }
 
     /** 把音频请求翻译成主控能执行的任务：保留用户原话，只补服务端已知的时长与受众。 */
