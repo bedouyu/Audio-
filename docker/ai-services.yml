@@ -1,0 +1,72 @@
+# 本地依赖服务：MySQL / Redis / Qdrant / MinIO。
+#
+# 只给本机开发用。口令是公开的开发默认值，可以用环境变量覆盖；
+# 如果要放到共享网络或长期使用，请改成自己的口令并限制端口暴露。
+#
+#   docker compose -f docker/ai-services.yml up -d
+#   docker compose -f docker/ai-services.yml down          # 停止，保留数据
+#   docker compose -f docker/ai-services.yml down -v       # 停止并删除数据卷
+#
+# 数据放在命名卷里（mysql-data 等），不受项目所在盘符影响。
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: docpilot-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-docpilot_root_dev}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-docpilot}
+      MYSQL_USER: ${MYSQL_USER:-docpilot}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-docpilot_mysql_dev}
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-docpilot_root_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: docpilot-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: docpilot-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: docpilot-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-docpilot}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-docpilot_minio_dev}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+volumes:
+  mysql-data:
+  redis-data:
+  qdrant-data:
+  minio-data:

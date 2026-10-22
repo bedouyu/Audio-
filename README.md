@@ -45,9 +45,11 @@ audiorag-java/
 
 ## 启动与升级
 
-一键启动：双击 `start-all.cmd`。它会启动 Docker Desktop（未运行时）、`ai-services` 的 MySQL/Redis/Qdrant/MinIO、后端（:18081）与桌面端（:5174），并逐步等待就绪；已在运行的环节会跳过。只想单独启动某一部时仍可用 `start-backend-local.cmd` 与 `start-frontend-local.cmd`，脚本名称和用法不变。
+**新机器从零部署**（装依赖、起数据库、配置密钥、准备向量模型）见 [本地部署](docs/16-本地部署.md)，那是一份可以照着做的完整清单。
 
-本机四个服务由 compose 项目 `ai-services` 提供（`docker compose -f D:\AI-Services\docker-compose.yml start`，也可以交给 `start-all.cmd` 处理）。后端健康检查为 `http://127.0.0.1:18081/api/health`，桌面开发界面端口为 `5174`。
+已经有环境时，一键启动：双击 `start-all.cmd`。它会启动 Docker Desktop（未运行时）、MySQL/Redis/Qdrant/MinIO、后端（:18081）与桌面端（:5174），并逐步等待就绪；已在运行的环节会跳过。只想单独启动某一部时仍可用 `start-backend-local.cmd` 与 `start-frontend-local.cmd`，脚本名称和用法不变。
+
+依赖服务的 compose 文件随仓库提供：`docker/ai-services.yml`（MySQL / Redis / Qdrant / MinIO，数据放在命名卷里）。启动器按「`-ComposeFile` → `AUDIORAG_COMPOSE_FILE` → 本机 `D:\AI-Services\docker-compose.yml` → 仓库内文件」的顺序选择，所以既能在已有环境继续用旧栈，也能在新机器直接从仓库起。后端健康检查为 `http://127.0.0.1:18081/api/health`，桌面开发界面端口为 `5174`。
 
 后端启动脚本使用 UTF-8，并通过 `-Djava.net.useSystemProxies=true` 沿用 Windows 系统代理，避免 Java 与系统客户端走不同网络而无法读取新闻流。程序对本机环回地址强制直连，确保 MySQL、MinIO、Qdrant 等本机服务不经代理。手工运行 JAR 时也应携带这两个 JVM 参数。
 
@@ -66,6 +68,7 @@ audiorag-java/
 ## 文档与验证
 
 - [自然语言音频中心重构](docs/13-自然语言音频中心重构.md)
+- [本地部署](docs/16-本地部署.md)
 - [架构说明](docs/01-架构说明.md)
 - [启动与学习路线](docs/02-启动与学习路线.md)
 - [Agent 运行时与多 Agent](docs/03-Agent运行时与多Agent.md)

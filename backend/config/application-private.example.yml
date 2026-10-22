@@ -1,10 +1,22 @@
-# 复制为 application-private.yml 后填写；该私有文件已排除提交。
+# 复制为 application-private.yml 后填写；该私有文件已排除提交，不会进版本库。
+# 口令要与 docker/ai-services.yml 的默认值一致，或改成同一套。
 spring:
   datasource:
     username: YOUR_MYSQL_USER
     password: YOUR_MYSQL_PASSWORD
+
 audiorag:
   minio:
     access-key: YOUR_MINIO_ACCESS_KEY
     secret-key: YOUR_MINIO_SECRET_KEY
-# 模型密钥优先使用 Windows 用户环境变量 DEEPSEEK_API_KEY。
+  # 换机器时通常还要改下面几项（缩进与 minio 同级，不要再写一次 audiorag:）：
+  # embedding-model-dir: D:/models/bge-small-zh-v1.5
+  # speech:
+  #   provider: cosyvoice          # 需要先按 docs/14 部署 CosyVoice
+  #   cosyvoice:
+  #     base-url: http://127.0.0.1:50000
+  # llm:
+  #   api-key: YOUR_DEEPSEEK_KEY   # 不写则读取环境变量 DEEPSEEK_API_KEY
+
+# 模型密钥优先使用 Windows 用户环境变量 DEEPSEEK_API_KEY（或 AUDIORAG_LLM_API_KEY）。
+# 完整部署步骤见 docs/16-本地部署.md。

@@ -3,13 +3,16 @@
 param(
     [switch]$SkipDocker,
     [switch]$SkipFrontend,
-    [string]$ComposeFile = 'D:\AI-Services\docker-compose.yml',
+    [string]$ComposeFile = '',
     [int]$DockerWaitSeconds = 240
 )
 
 $ErrorActionPreference = 'Stop'
 $audioRoot = $PSScriptRoot
 . (Join-Path $audioRoot 'scripts\Resolve-Toolchain.ps1')
+. (Join-Path $audioRoot 'scripts\Resolve-ComposeFile.ps1')
+# 未显式指定时按「环境变量 → 旧的本机路径 → 仓库内 docker\ai-services.yml」解析。
+$ComposeFile = Resolve-ComposeFile -Explicit $ComposeFile -Root $audioRoot
 
 $services = [ordered]@{ 3306 = 'MySQL'; 6379 = 'Redis'; 6333 = 'Qdrant'; 9000 = 'MinIO' }
 
