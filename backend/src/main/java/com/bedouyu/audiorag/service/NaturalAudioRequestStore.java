@@ -106,8 +106,9 @@ public class NaturalAudioRequestStore {
         String referenceTopic = progressQuestion && previous != null
                 ? String.valueOf(previous.context().getOrDefault("request_instruction", previous.topic())) : String.valueOf(project.get("topic"));
         if (referenceTopic.length() > 500) referenceTopic = referenceTopic.substring(0, 500);
+        // 默认只合成第一段：讲稿先给用户看，确认后再按需生成后续片段。
         var command = new QueueCommand(referenceTopic, projectId, intent.durationMinutes(),
-                Math.min(3, intent.durationMinutes()), null, voice, 2, id, "CONTINUOUS", effective, sourceText, sourceTitle, context);
+                Math.min(3, intent.durationMinutes()), null, voice, 1, id, "CONTINUOUS", effective, sourceText, sourceTitle, context);
         var creation = queues.reserve(userId, command);
         receipts.saveAndFlush(new AudioInstructionReceipt(userId, projectId, id, fingerprint, creation.queueId()));
         return new Accepted(project, command, creation, !creation.created());

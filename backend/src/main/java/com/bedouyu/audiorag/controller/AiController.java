@@ -177,8 +177,10 @@ public class AiController {
     @PostMapping("/api/v1/continuous-audio/{queueId}/refill")
     public Map<String, Object> refill(
             @RequestHeader(value = "Authorization", required = false) String authorization,
-            @PathVariable String queueId, @RequestBody(required = false) Map<String, Object> ignored) {
-        return continuousAudio.refill(userId(authorization), queueId);
+            @PathVariable String queueId, @RequestBody(required = false) Map<String, Object> body) {
+        Object requested = body == null ? null : body.get("segments");
+        int segments = requested instanceof Number number ? number.intValue() : 0;
+        return continuousAudio.refill(userId(authorization), queueId, segments);
     }
 
     @PostMapping("/api/v1/continuous-audio/{queueId}/segments/{segmentNumber}/recover")

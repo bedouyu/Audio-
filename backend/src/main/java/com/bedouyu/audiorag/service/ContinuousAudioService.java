@@ -251,12 +251,22 @@ public class ContinuousAudioService {
     }
 
     public Map<String, Object> refill(long userId, String queueId) {
+        return refill(userId, queueId, 0);
+    }
+
+    /**
+     * 按需继续合成：{@code segments} 为本次最多合成几段（0 表示沿用队列的预取设置，默认 1）。
+     * 讲稿在准备阶段就已全部生成，这里只决定合成多少段音频。
+     */
+    public Map<String, Object> refill(long userId, String queueId, int segments) {
         var current = store.statusIfPresent(userId, queueId);
         if (current.isEmpty()) {
             legacySnapshot(userId, queueId);
             throw new ApiException(HttpStatus.CONFLICT, "旧 Redis 队列仅支持查看，不自动迁移或重新生成；请建立新的课程队列");
         }
-        generate(userId, queueId, ((Number) current.get().get("prefetch_size")).intValue());
+        int maximum = segments > 0 ? Math.min(50, segments)
+                : ((Number) current.get().get("prefetch_size")).intValue();
+        generate(userId, queueId, Math.max(1, maximum));
         return status(userId, queueId);
     }
 

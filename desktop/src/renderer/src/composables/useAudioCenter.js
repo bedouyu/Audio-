@@ -268,12 +268,13 @@ export function useAudioCenter(workspace) {
     if (player) player.playbackRate = state.speed;
     save(true);
   }
-  async function refill(manual = false) {
+  async function refill(manual = false, segments = 0) {
     if (state.refilling || !state.queue?.queue_id || !canRefill(state.queue, manual)) return false;
     const version = revision, id = state.queue.queue_id;
     state.refilling = true;
     try {
-      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/refill", "POST", {});
+      const body = segments > 0 ? { segments } : {};
+      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/refill", "POST", body);
       if (version !== revision) return false;
       state.queue = result; state.error = ""; startPolling(); save();
       updateHistory(result);

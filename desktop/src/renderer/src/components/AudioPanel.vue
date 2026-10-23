@@ -5,6 +5,7 @@ import { canRefill } from "../../../shared/audio-queue-policy.js";
 import AudioRequestComposer from "./AudioRequestComposer.vue";
 import AudioHistory from "./AudioHistory.vue";
 import ReasonDialog from "./ReasonDialog.vue";
+import ScriptNotebook from "./ScriptNotebook.vue";
 const props = defineProps({ workspace: Object, audio: Object });
 const emit = defineEmits(["submit"]);
 const { state, safe, refreshProject } = props.workspace;
@@ -97,6 +98,18 @@ const sources = computed(() => {
   return Array.isArray(citations) ? citations : [];
 });
 function openSource(source) { if (/^https?:\/\//.test(source || "")) window.audioAgent.openSource(source); }
+// 讲稿以"记事本"形式常驻在右侧：分页浏览、直接编辑，保存后只重念这一段。
+const scriptSegments = computed(() => (playback.queue?.segments || []).filter(segment => segment.script));
+const readyCount = computed(() => (playback.queue?.segments || []).filter(s => s.status === "READY").length);
+const pendingCount = computed(() => (playback.queue?.segments || []).filter(s => s.status === "PENDING").length);
+async function saveNotebook(payload) {
+  if (!confirm(`保存第 ${payload.number} 段的讲稿，并重新合成这一段？`)) return;
+  await props.audio.reviseSegment(payload.number, { text: payload.text });
+}
+async function undoNotebook(number) {
+  if (!confirm(`把第 ${number} 段改回上一版，并重新合成？`)) return;
+  await props.audio.undoRevision(number);
+}
 async function recover(segment) {
   if (!confirm("核验这段已有音频并恢复？不会再次调用语音合成。")) return;
   await safe(async () => { await props.audio.reviewSegment(segment); await refreshProject(); });
@@ -138,12 +151,19 @@ async function exportRecord(record) {
     <div class="panel-heading"><div><div class="eyebrow">LISTEN & EXPLORE</div><h2>{{ state.project.title }}</h2></div><Headphones :size="26" class="accent" /></div>
     <p class="muted">继续说出你的要求，会结合这个空间的资料准备内容。</p>
     <AudioRequestComposer :audio="audio" compact @submit="emit('submit', $event)" />
-    <div v-if="active" class="card current-program">
+    <ScriptNotebook v-if="scriptSegments.length" :segments="scriptSegments"
+      :busy="playback.revising != null" @save="saveNotebook" @undo="undoNotebook" />    <div v-if="active" class="card current-program">
       <div class="row spaced"><h3>{{ current?.title || (playback.queue.status === "FAILED" ? "音频准备失败" : "正在准备你的音频") }}</h3><span class="badge">{{ playback.queue.lessons?.length || 0 }} 段已就绪</span></div>
       <p>{{ message }}</p>
       <p v-if="playback.instruction" class="muted">你的要求：{{ playback.instruction }}</p>
       <p class="muted">底部播放器可连续播放，返回首页也能继续收听。</p>
-      <button v-if="canRefill(playback.queue, true)" :disabled="playback.refilling" @click="audio.refill(true)">{{ playback.refilling ? "正在生成…" : "继续生成后续内容" }}</button>
+      <div v-if="canRefill(playback.queue, true)" class="row refill-row">
+        <button :disabled="playback.refilling" @click="audio.refill(true, 1)">生成下一段</button>
+        <button v-if="pendingCount > 1" :disabled="playback.refilling" @click="audio.refill(true, pendingCount)">
+          生成全部剩余（{{ pendingCount }} 段）
+        </button>
+        <span class="muted">已就绪 {{ readyCount }} / {{ (playback.queue?.segments || []).length }} 段</span>
+      </div>
       <div v-if="canRevoice" class="row revoice-row">
         <select v-model="revoiceVoice" :disabled="playback.revoicing">
           <option value="">换一个音色重念…</option>
