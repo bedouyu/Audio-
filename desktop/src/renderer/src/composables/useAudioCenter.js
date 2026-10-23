@@ -366,6 +366,25 @@ export function useAudioCenter(workspace) {
       state.revising = null;
     }
   }
+  /** 追加：在现有讲稿后继续写新内容，原有段落不动。 */
+  async function extendWhole(instruction) {
+    const id = state.queue?.queue_id;
+    if (!id || !instruction || state.revising != null) return false;
+    const version = revision;
+    state.revising = "all";
+    try {
+      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/extend", "POST", { instruction });
+      if (version !== revision) return false;
+      state.queue = result; state.error = ""; startPolling(); save();
+      updateHistory(result);
+      return true;
+    } catch (error) {
+      if (version === revision) state.error = error.message;
+      return false;
+    } finally {
+      state.revising = null;
+    }
+  }
   /** 撤回上一版讲稿：改回上次修订前的文字并重新合成这一段。 */
   async function undoRevision(number) {
     const id = state.queue?.queue_id;
@@ -486,7 +505,7 @@ export function useAudioCenter(workspace) {
       for (const action of ["play", "pause", "nexttrack", "previoustrack"]) navigator.mediaSession.setActionHandler(action, null);
     }
   });
-  return { state, current, source, total, message, bindPlayer, submit, poll, refresh, refill, revoice, reviseSegment, rewriteWhole, undoRevision, refreshVoices, next, previous,
+  return { state, current, source, total, message, bindPlayer, submit, poll, refresh, refill, revoice, reviseSegment, rewriteWhole, extendWhole, undoRevision, refreshVoices, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
     openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
 }

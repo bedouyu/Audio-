@@ -262,6 +262,32 @@ public class ContinuousAudioService {
         return store.status(userId, queueId);
     }
 
+    /**
+     * 追加：用户说“再生成一些”“多来几句”时，只在现有讲稿后面续写新内容，
+     * 原有分段与音频保持不变，然后只合成新增的第一段。
+     */
+    public Map<String, Object> extendWhole(long userId, String queueId, String instruction) {
+        String request = instruction == null ? "" : instruction.strip();
+        if (request.length() < 2)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "请写下要续写什么、多长、什么难度");
+        if (reviser == null)
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿续写不可用，请改为手动编辑后保存");
+        String full = store.fullScript(userId, queueId);
+        if (full.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "这条音频还没有讲稿，不能续写");
+        String tail = full.length() <= 1200 ? full : full.substring(full.length() - 1200);
+        String addition = reviser.extend(tail, request).strip();
+        if (addition.length() < 20 || addition.length() > 20_000)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "续写内容需为 20 到 20000 个字符");
+        String language = SpeechService.detectLanguage(tail);
+        if (!language.equals(SpeechService.detectLanguage(addition)))
+            throw new ApiException(HttpStatus.BAD_REQUEST, "续写的语言和原文不一致，请保持同一种语言");
+        int segments = Math.max(1, ((Number) store.status(userId, queueId).get("total_segments")).intValue());
+        int average = Math.max(200, full.length() / segments);
+        List<String> parts = splitInto(addition, Math.max(1, (int) Math.ceil(addition.length() / (double) average)));
+        var outcome = store.appendScripts(userId, queueId, parts);
+        generate(userId, queueId, ((Number) outcome.get("added")).intValue());
+        return store.status(userId, queueId);
+    }
     /** 把整篇文本按句子边界均匀装进 parts 段，尽量保持用户熟悉的页数。 */
     static List<String> splitInto(String script, int parts) {
         String text = script == null ? "" : script.strip();

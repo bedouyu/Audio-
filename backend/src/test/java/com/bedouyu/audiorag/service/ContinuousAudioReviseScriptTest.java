@@ -127,6 +127,19 @@ class ContinuousAudioReviseScriptTest {
         assertThat(String.join("", parts)).isEqualTo(text);
         assertThat(parts).allSatisfy(part -> assertThat(part).endsWith("。"));
     }
+    @Test void appendScriptsKeepsExistingSegmentsAndNumbersNewOnes() {
+        Fixture fixture = fixture();
+        fixture.segment().ready("/media/a.wav", 41L);
+        String original = fixture.segment().getScript();
+
+        var outcome = store.appendScripts(1, fixture.queue().getId(), List.of("新增的一段内容。", "新增的第二段。"));
+
+        assertThat(fixture.segment().getScript()).isEqualTo(original);
+        assertThat(fixture.segment().getStatus()).isEqualTo("READY");
+        assertThat(outcome.get("added")).isEqualTo(2);
+        assertThat(outcome.get("start")).isEqualTo(2);
+        verify(segments, times(2)).save(any(ContinuousAudioSegment.class));
+    }
     private Fixture fixture() {
         String id = UUID.randomUUID().toString();
         var command = new QueueCommand("Topic", 7, 3, 1, "", "", 1, UUID.randomUUID().toString());

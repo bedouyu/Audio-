@@ -35,6 +35,14 @@ public class ScriptReviser {
             "4. 输出重写后的整篇讲稿正文；段落之间用空行分隔，方便之后再分段。",
             "5. 严格按修改要求执行，不要因为“看起来更完整”而自行加回被要求删除的内容。");
 
+    private static final String EXTEND_SYSTEM = String.join("\n",
+            "你是音频讲稿的续写编辑。用户会给你现有讲稿的结尾片段和一条续写要求。",
+            "规则：",
+            "1. 只输出新增的部分，不要重复或改写已有内容，不要加“接下来”“继续”之类的过渡语。",
+            "2. 严格沿用样例的格式、语言、节奏和难度；样例是英文-中文交替就照此交替。",
+            "3. 不要序号、标题、解释或前后缀，直接给可朗读的正文。",
+            "4. 段落之间用空行分隔，方便之后分段。");
+
     private final AgentModelGateway model;
 
     public ScriptReviser(AgentModelGateway model) { this.model = model; }
@@ -86,6 +94,30 @@ public class ScriptReviser {
         }
     }
 
+    /**
+     * 续写：只产出**新增**内容，已有部分保持不变。
+     * 给它现有讲稿的结尾片段作格式样例，避免整篇塞进去导致它重写全文。
+     */
+    public String extend(String tail, String instruction) {
+        if (!model.configured())
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "模型未配置，无法续写讲稿");
+        var messages = List.of(
+                Map.<String, Object>of("role", "system", "content", EXTEND_SYSTEM),
+                Map.<String, Object>of("role", "user", "content",
+                        "现有讲稿的结尾片段：\n<<<\n" + tail + "\n>>>\n\n续写要求：" + instruction));
+        try {
+            var reply = model.decide(messages, List.of(), token -> { }, 240_000L);
+            String text = clean(reply == null ? null : reply.content());
+            if (text.isBlank())
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "模型没有返回续写内容，请重试");
+            return text;
+        } catch (ApiException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            log.warn("讲稿续写失败：{}", failure.toString());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿续写失败：" + failure.getMessage());
+        }
+    }
     /** 去掉模型偶尔带上的代码围栏、"修改后的讲稿：" 前缀和包裹引号。 */
     static String clean(String raw) {
         if (raw == null) return "";

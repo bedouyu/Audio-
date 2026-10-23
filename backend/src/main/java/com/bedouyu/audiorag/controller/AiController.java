@@ -153,6 +153,15 @@ public class AiController {
         return continuousAudio.revoice(userId(authorization), queueId, voice == null ? null : String.valueOf(voice));
     }
 
+    /** 追加：在现有讲稿后继续写新内容，原有段落不动。 */
+    @PostMapping("/api/v1/continuous-audio/{queueId}/extend")
+    public Map<String, Object> extendScript(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @RequestBody(required = false) Map<String, Object> body) {
+        Object instruction = body == null ? null : body.get("instruction");
+        return continuousAudio.extendWhole(userId(authorization), queueId,
+                instruction == null ? null : String.valueOf(instruction));
+    }
     /** 整篇重写讲稿：改格式或结构时用，结果直接写回这条音频的讲稿。 */
     @PostMapping("/api/v1/continuous-audio/{queueId}/rewrite")
     public Map<String, Object> rewriteScript(

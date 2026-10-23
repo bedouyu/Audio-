@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 
 const props = defineProps({ segments: Array, busy: Boolean });
-const emit = defineEmits(["save", "undo", "rewrite"]);
+const emit = defineEmits(["save", "undo", "rewrite", "extend"]);
 
 const page = ref(0);
 const draft = ref("");
@@ -33,6 +33,12 @@ function rewrite() {
   emit("rewrite", text);
   whole.value = "";
 }
+function extend() {
+  const text = whole.value.trim();
+  if (!text) return;
+  emit("extend", text);
+  whole.value = "";
+}
 function save() {
   if (!current.value || !dirty.value || !draft.value.trim()) return;
   emit("save", { number: current.value.segment_number, text: draft.value.trim() });
@@ -60,7 +66,8 @@ function save() {
     </div>
     <form class="whole-rewrite" @submit.prevent="rewrite">
       <input v-model="whole" :disabled="busy" placeholder="整篇一起改：例如「去掉开场白和串场，只保留英语-汉语-英语两遍-下一句」" />
-      <button type="submit" :disabled="busy || !whole.trim()">{{ busy ? "正在重写…" : "整篇重写" }}</button>
+      <button type="submit" :disabled="busy || !whole.trim()">{{ busy ? "正在处理…" : "整篇重写" }}</button>
+      <button type="button" :disabled="busy || !whole.trim()" @click="extend">追加一些</button>
     </form>
   </section>
 </template>

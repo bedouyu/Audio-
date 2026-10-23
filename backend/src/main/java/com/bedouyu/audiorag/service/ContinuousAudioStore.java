@@ -272,6 +272,28 @@ public class ContinuousAudioStore {
         return segment(queue, number).getScript();
     }
 
+    /** 在现有分段之后追加新内容：编号接着排，原有段落与音频不动。 */
+    @Transactional
+    public Map<String, Object> appendScripts(long userId, String queueId, List<String> scripts) {
+        var queue = required(userId, queueId);
+        reconcile(queue);
+        if ("GENERATING".equals(queue.getStatus()))
+            throw conflict("正在合成音频，等这一段完成后再追加");
+        if (scripts == null || scripts.isEmpty() || scripts.size() > 200
+                || scripts.stream().anyMatch(script -> script == null || script.isBlank()))
+            throw new IllegalArgumentException("追加的讲稿内容无效");
+        List<ContinuousAudioSegment> existing = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
+        int next = existing.stream().mapToInt(ContinuousAudioSegment::getSegmentNumber).max().orElse(0) + 1;
+        int start = next;
+        for (String raw : scripts) {
+            String script = raw.strip();
+            segments.save(new ContinuousAudioSegment(queueId, next++, script, Hashing.sha256(script),
+                    UUID.randomUUID().toString()));
+        }
+        queue.clearError();
+        refreshQueueStatus(queue);
+        return Map.of("added", scripts.size(), "start", start, "total", next - 1);
+    }
     /** 整篇讲稿（按段拼接），作为整篇重写的基线。 */
     @Transactional
     public String fullScript(long userId, String queueId) {
