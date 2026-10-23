@@ -9,6 +9,9 @@ public final class ToolSchemas {
     }
     public static Map<String, Object> string(int maximum) { return Map.of("type", "string", "minLength", 1, "maxLength", maximum); }
     public static Map<String, Object> integer(int min, int max) { return Map.of("type", "integer", "minimum", min, "maximum", max); }
+    public static Map<String, Object> bool(String description) {
+        return Map.of("type", "boolean", "description", description);
+    }
     public static Map<String, Object> strings(int maximum) {
         return Map.of("type", "array", "items", string(100), "maxItems", maximum);
     }

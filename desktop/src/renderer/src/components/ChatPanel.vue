@@ -14,6 +14,29 @@ const sessionId = ref(null);
 const busy = ref(false);
 const status = ref("");
 const list = ref(null);
+const stepLabels = {
+  model_start: "思考", model_end: "想好了",
+  tool_start: "执行", tool_end: "完成",
+  delegate_start: "委派", delegate_end: "委派完成",
+  artifact: "产物", retrieval: "检索", memory_prepare: "回忆",
+  context_budget: "预算检查", task_specification: "拆解任务",
+  agent_finish: "收尾", node_heartbeat: "心跳",
+};
+function stepIcon(step) {
+  if (step.kind === "model_start" || step.kind === "model_end") return "🧠";
+  if (step.kind === "tool_start" || step.kind === "tool_end") return "🔧";
+  if (step.kind === "artifact") return "📄";
+  if (step.kind === "delegate_start" || step.kind === "delegate_end") return "🤝";
+  return "·";
+}
+function stepTool(step) {
+  return stepLabels[step.kind] || step.tool || step.kind || "";
+}
+function stepTone(step) {
+  if (step.status === "FAILED") return "failed";
+  if (step.status === "RUNNING") return "running";
+  return "";
+}
 const activity = ref([]);
 const memoryStrategy = ref("");
 const agentLabels = {
@@ -208,10 +231,13 @@ onBeforeUnmount(() => {
         <h3>聊聊这个内容</h3>
         <p>可以追问背景、解释难句，或者讨论下一段怎么制作。我会结合这个空间的资料回答。</p>
       </div>
-      <details v-if="activity.length" class="agent-activity">
-        <summary>本轮执行过程 · {{ activity.length }} 个事件</summary>
-        <div v-for="step in activity" :key="step.sequence" class="agent-step">
-          <span>{{ step.label }} · {{ step.tool || step.kind }}</span>
+      <details v-if="activity.length" class="agent-activity" :open="busy">
+        <summary>
+          {{ busy ? "正在思考…" : "本轮执行过程" }} · {{ activity.length }} 步
+          <span v-if="busy && status" class="activity-now">{{ status }}</span>
+        </summary>
+        <div v-for="step in activity" :key="step.sequence" class="agent-step" :class="stepTone(step)">
+          <span>{{ stepIcon(step) }} {{ step.label }} · {{ stepTool(step) }}</span>
           <small>{{ step.status }} · {{ step.detail }}</small>
           <RetrievalDecision :event="step" />
           <MemoryDecision :event="step" />

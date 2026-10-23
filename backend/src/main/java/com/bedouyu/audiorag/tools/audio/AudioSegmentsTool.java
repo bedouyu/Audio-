@@ -30,7 +30,8 @@ public class AudioSegmentsTool implements FunctionTool {
         return new FunctionDefinition("audio_segments",
                 "读取当前项目最近一条音频的分段情况：每段编号、合成状态、字数与开头摘录。"
                         + "要改某一段讲稿前必须先调用它确认段号和内容；不传 queue_id 时取该项目最新一条音频。",
-                ToolSchemas.object(Map.of("queue_id", ToolSchemas.string(36)), "queue_id"));
+                ToolSchemas.object(Map.of("queue_id", ToolSchemas.string(36),
+                        "full", ToolSchemas.bool("是否返回完整正文；默认只给开头 1200 字")), "queue_id"));
     }
 
     public Object execute(JsonNode args, AgentExecutionContext context) {
@@ -45,7 +46,10 @@ public class AudioSegmentsTool implements FunctionTool {
                 view.put("segment_number", segment.get("segment_number"));
                 view.put("status", segment.get("status"));
                 view.put("characters", script.length());
-                view.put("preview", script.length() > 160 ? script.substring(0, 160) + "…" : script);
+                boolean full = args.path("full").asBoolean(false);
+                int limit = full ? script.length() : 1200;
+                view.put(full ? "script" : "preview",
+                        script.length() > limit ? script.substring(0, limit) + "…" : script);
                 segments.add(view);
             }
         }

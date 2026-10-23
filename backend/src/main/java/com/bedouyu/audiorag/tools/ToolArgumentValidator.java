@@ -12,6 +12,7 @@ public class ToolArgumentValidator {
         boolean valid = switch (type) {
             case "object" -> value.isObject(); case "array" -> value.isArray();
             case "string" -> value.isTextual(); case "integer" -> value.isIntegralNumber();
+            case "boolean" -> value.isBoolean();
             default -> false;
         };
         if (!valid) throw new IllegalArgumentException("工具参数类型不符：" + type);

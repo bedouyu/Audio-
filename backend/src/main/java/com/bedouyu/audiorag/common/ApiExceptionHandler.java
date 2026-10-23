@@ -18,6 +18,17 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(exception.status()).body(Map.of("detail", exception.getMessage()));
     }
 
+    /**
+     * Agent 主动停机（预算耗尽、重复调用同一工具、上下文超限等）是可解释的结果，不是服务器故障。
+     * 必须把原因告诉用户，不能退化成"服务处理失败"。
+     */
+    @ExceptionHandler(com.bedouyu.audiorag.core.loop.AgentBudget.AgentStopped.class)
+    ResponseEntity<Map<String, String>> handleAgentStopped(com.bedouyu.audiorag.core.loop.AgentBudget.AgentStopped exception) {
+        log.warn("Agent stopped ({}): {}", exception.status(), exception.getMessage());
+        return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT)
+                .body(Map.of("detail", "任务已停止：" + exception.getMessage()));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<Map<String, String>> handleValidation(MethodArgumentNotValidException exception) {
         String message = exception.getBindingResult().getFieldErrors().stream()
