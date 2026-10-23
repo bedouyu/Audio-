@@ -54,6 +54,14 @@ const active = computed(() => playback.queue && playback.project?.id === state.p
 const editing = ref(null);
 const editText = ref("");
 const editInstruction = ref("");
+const scriptExpanded = ref(false);
+// 讲稿常驻显示：完成时取正在播的那段；合成中（没有 lessons）取该段最新文字。
+const segmentScript = (number) => (playback.queue?.segments || [])
+  .find(item => item.segment_number === number)?.script || "";
+const currentScript = computed(() => current.value?.script
+  || segmentScript((playback.index || 0) + 1)
+  || segmentScript(1));
+const scriptClamp = computed(() => !scriptExpanded.value && currentScript.value.length > 420);
 function openEditor(segment) {
   editing.value = segment.segment_number;
   editText.value = segment.script || "";
@@ -146,7 +154,19 @@ async function exportRecord(record) {
         <template v-else-if="revoiceStartsOver">这段音频还没有可用的声音（上次失败或被中断），换音色会直接按已有讲稿重新合成全部片段。</template>
         <template v-else>讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</template>
       </p>
-      <details v-if="current?.script"><summary>查看当前文字稿</summary><pre>{{ current.script }}</pre></details>
+      <div v-if="currentScript" class="card script-card">
+        <div class="row spaced">
+          <h3>这段的讲稿</h3>
+          <span class="badge">{{ currentScript.length }} 字</span>
+        </div>
+        <pre :class="{ clamped: scriptClamp }">{{ currentScript }}</pre>
+        <div class="row">
+          <button v-if="currentScript.length > 420" @click="scriptExpanded = !scriptExpanded">
+            {{ scriptExpanded ? "收起" : "展开全文" }}
+          </button>
+          <small class="muted">改这段的入口在下方「分段与任务详情」里。</small>
+        </div>
+      </div>
       <details v-if="sources.length"><summary>参考来源 · {{ sources.length }}</summary>
         <div v-for="(item, index) in sources" :key="index" class="content-source">
           <button v-if="/^https?:\/\//.test(item.source || item.url || '')" @click="openSource(item.source || item.url)">{{ item.title || item.source || item.url }}</button>

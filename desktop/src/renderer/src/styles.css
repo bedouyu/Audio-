@@ -730,3 +730,6 @@ pre {
   .player-detail { display: none; }
   .home-intro h1 { font-size: 31px; }
 }
+
+.script-card pre { white-space: pre-wrap; line-height: 1.9; font-family: inherit; font-size: 14px; margin: 10px 0; }
+.script-card pre.clamped { max-height: 240px; overflow: hidden; mask-image: linear-gradient(#000 70%, transparent); }
