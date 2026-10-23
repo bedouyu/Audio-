@@ -101,7 +101,31 @@ public class NativeFunctionCallingGateway implements AgentModelGateway {
     private String modelFor(String modelTier) {
         return "review".equals(modelTier) && reviewModel != null && !reviewModel.isBlank() ? reviewModel : model;
     }
+    /**
+     * 上游（或中间网络）会在模型长时间不出字时重置连接：本机三次失败都发生在发起后约 20 秒，
+     * 报错均为 "Connection reset"。这里在**还没有任何输出**时自动重试一次，
+     * 既不会重复计费已生成的内容，也不会让用户看到半截回答。
+     */
     private AgentModelReply decideWith(List<Map<String, Object>> messages, List<FunctionDefinition> tools,
+                                       Consumer<String> contentToken, long timeoutMillis, String modelName) {
+        for (int attempt = 1; ; attempt++) {
+            java.util.concurrent.atomic.AtomicBoolean emitted = new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.function.Consumer<String> guarded = text -> {
+                emitted.set(true);
+                contentToken.accept(text);
+            };
+            try {
+                return attemptOnce(messages, tools, guarded, timeoutMillis, modelName);
+            } catch (IllegalStateException failure) {
+                boolean retryable = failure.getMessage() != null
+                        && failure.getMessage().startsWith("Agent 模型连接或输出流失败");
+                if (attempt >= 2 || emitted.get() || !retryable) throw failure;
+                LOGGER.warn("模型流在输出前被重置，重试一次（第 {} 次）：{}", attempt, failure.getMessage());
+            }
+        }
+    }
+
+    private AgentModelReply attemptOnce(List<Map<String, Object>> messages, List<FunctionDefinition> tools,
                                        Consumer<String> contentToken, long timeoutMillis, String modelName) {
         observation.remove();
         if (timeoutMillis <= 0) throw new IllegalStateException("Agent 模型调用剩余时间预算已耗尽");

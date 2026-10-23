@@ -51,6 +51,9 @@ audiorag:
     tool-workers: ${AUDIORAG_TOOL_WORKERS:4}
     tool-queue-capacity: ${AUDIORAG_TOOL_QUEUE_CAPACITY:16}
     tool-timeout-ms: ${AUDIORAG_TOOL_TIMEOUT_MS:30000}
+    # 一次"写稿 + 复核 + 修订"要经过主控与两个子 Agent 多轮，24 轮不够用会中途停止。
+    model-limit: ${AUDIORAG_AGENT_MODEL_LIMIT:40}
+    tool-limit: ${AUDIORAG_AGENT_TOOL_LIMIT:48}
     node-heartbeat-ms: ${AUDIORAG_NODE_HEARTBEAT_MS:10000}
     node-lease-ms: ${AUDIORAG_NODE_LEASE_MS:90000}
     thinking-enabled: ${AUDIORAG_AGENT_THINKING_ENABLED:false}

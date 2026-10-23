@@ -24,12 +24,17 @@ public class AgentOrchestrator {
     private final AudioRagRepository repository;
     private final MemoryContextService memory;
     private final boolean enabled;
+    private final int modelLimit;
+    private final int toolLimit;
     private final AgentRequestCoordinator requests;
     private final TaskSpecificationResolver specifications;
     public AgentOrchestrator(ReActLoopEngine loop, AgentRegistry agents, AgentModelGateway model,
             AgentRunStore runs, AgentArtifactStore artifacts, AudioRagRepository repository,
             MemoryContextService memory, AgentRequestCoordinator requests, TaskSpecificationResolver specifications,
-            @Value("${audiorag.agent.enabled:true}") boolean enabled) {
+            @Value("${audiorag.agent.enabled:true}") boolean enabled,
+            @Value("${audiorag.agent.model-limit:40}") int modelLimit,
+            @Value("${audiorag.agent.tool-limit:48}") int toolLimit) {
+        this.modelLimit = modelLimit; this.toolLimit = toolLimit;
         this.loop = loop; this.agents = agents; this.model = model; this.runs = runs;
         this.artifacts = artifacts; this.repository = repository; this.memory = memory; this.enabled = enabled;
         this.requests = requests; this.specifications = specifications;
@@ -41,7 +46,7 @@ public class AgentOrchestrator {
         if (reservation.replay() != null) return reservation.replay();
         String session = reservation.sessionId();
         String run = reservation.runId();
-        AgentBudget budget = new AgentBudget();
+        AgentBudget budget = new AgentBudget(modelLimit, toolLimit, java.time.Duration.ofMinutes(10));
         EvidenceLedger evidence = new EvidenceLedger();
         Consumer<Map<String, Object>> events = event -> {
             runs.assertCurrentInstanceLease();
