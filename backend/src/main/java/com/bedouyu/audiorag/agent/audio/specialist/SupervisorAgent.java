@@ -10,6 +10,6 @@ public class SupervisorAgent implements SpecialistAgent {
                 Set.of("knowledge_search", "knowledge_catalog", "web_search", "project_context", "delegate_agent", "read_artifact",
                         "memory_search", "memory_read", "task_read", "declare_task_specification",
                         // 改稿与换音色：直接作用于当前项目的音频，改坏了有 undo_segment_revision 兜底。
-                        "audio_segments", "revise_segment", "rewrite_script", "extend_script", "revoice_segment", "undo_segment_revision"), "", 12);
+                        "audio_segments", "revise_segment", "rewrite_script", "extend_script", "generate_audio", "revoice_segment", "undo_segment_revision"), "", 12);
     }
 }

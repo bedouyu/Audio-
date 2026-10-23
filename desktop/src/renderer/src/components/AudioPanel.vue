@@ -164,12 +164,12 @@ async function exportRecord(record) {
       @cancel="resetTarget = null" @confirm="reset" />
     <div class="panel-heading"><div><div class="eyebrow">LISTEN & EXPLORE</div><h2>{{ state.project.title }}</h2></div><Headphones :size="26" class="accent" /></div>
     <p class="muted">
-      <template v-if="scriptSegments.length">右侧是你的讲稿，可以直接在稿纸上改；要重新做一条音频，展开下面的入口。</template>
+      <template v-if="scriptSegments.length">右侧是讲稿，直接在上面改会自动保存；换格式、续写、换音色、多合成几段，都直接在左边对话里说。</template>
       <template v-else>说一句想听什么，会结合这个空间的资料准备内容。</template>
     </p>
     <template v-if="scriptSegments.length">
       <ScriptNotebook :segments="scriptSegments" :busy="playback.revising != null"
-        @save="saveNotebook" @undo="undoNotebook" @rewrite="rewriteWhole" @extend="extendScript" />
+        @save="saveNotebook" />
       <details class="new-audio-entry">
         <summary>＋ 制作一条新音频（换主题或重新生成）</summary>
         <AudioRequestComposer :audio="audio" compact @submit="emit('submit', $event)" />
@@ -181,42 +181,7 @@ async function exportRecord(record) {
       <p>{{ message }}</p>
       <p v-if="playback.instruction" class="muted">你的要求：{{ playback.instruction }}</p>
       <p class="muted">底部播放器可连续播放，返回首页也能继续收听。</p>
-      <div v-if="canRefill(playback.queue, true)" class="row refill-row">
-        <button :disabled="playback.refilling" @click="audio.refill(true, 1)">生成下一段</button>
-        <button v-if="pendingCount > 1" :disabled="playback.refilling" @click="audio.refill(true, pendingCount)">
-          生成全部剩余（{{ pendingCount }} 段）
-        </button>
-        <span class="muted">已就绪 {{ readyCount }} / {{ (playback.queue?.segments || []).length }} 段</span>
-      </div>
-      <div v-if="canRevoice" class="row revoice-row">
-        <select v-model="revoiceVoice" :disabled="playback.revoicing">
-          <option value="">换一个音色重念…</option>
-          <option v-for="voice in revoiceOptions" :key="voice.name" :value="voice.name">
-            {{ voice.display_name || voice.name }}
-          </option>
-        </select>
-        <button :disabled="!revoiceVoice || playback.revoicing || revoiceBlocked" @click="confirmRevoice">
-          {{ playback.revoicing ? "正在重念…" : "换音色重制" }}
-        </button>
-      </div>
-      <p v-if="canRevoice" class="muted">
-        <template v-if="revoiceBlocked">正在生成内容，等这批片段完成后再换音色。</template>
-        <template v-else-if="revoiceStartsOver">这段音频还没有可用的声音（上次失败或被中断），换音色会直接按已有讲稿重新合成全部片段。</template>
-        <template v-else>讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</template>
-      </p>
-      <div v-if="currentScript" class="card script-card">
-        <div class="row spaced">
-          <h3>这段的讲稿</h3>
-          <span class="badge">{{ currentScript.length }} 字</span>
-        </div>
-        <pre :class="{ clamped: scriptClamp }">{{ currentScript }}</pre>
-        <div class="row">
-          <button v-if="currentScript.length > 420" @click="scriptExpanded = !scriptExpanded">
-            {{ scriptExpanded ? "收起" : "展开全文" }}
-          </button>
-          <small class="muted">改这段的入口在下方「分段与任务详情」里。</small>
-        </div>
-      </div>
+      <p v-if="canRevoice" class="muted">讲稿不变；换音色直接在左边说「换成我的声音」或「换成官方示例音色」。</p>
       <details v-if="sources.length"><summary>参考来源 · {{ sources.length }}</summary>
         <div v-for="(item, index) in sources" :key="index" class="content-source">
           <button v-if="/^https?:\/\//.test(item.source || item.url || '')" @click="openSource(item.source || item.url)">{{ item.title || item.source || item.url }}</button>
@@ -230,26 +195,7 @@ async function exportRecord(record) {
           <div v-if="segment.status === 'NEEDS_REVIEW'" class="row">
             <button :disabled="state.busy" @click="recover(segment)">核验原音频并恢复</button><button :disabled="state.busy" @click="resetTarget = segment">重置尝试</button>
           </div>
-          <div v-if="editing !== segment.segment_number" class="row">
-            <button :disabled="state.busy || playback.revising != null" @click="openEditor(segment)">改这段讲稿</button>
-            <small class="muted">{{ (segment.script || "").length }} 字</small>
-          </div>
-          <div v-else class="script-editor">
-            <label>这段的讲稿<textarea v-model="editText" rows="6" maxlength="20000" /></label>
-            <label>想怎么改（可选）
-              <input v-model="editInstruction" maxlength="300"
-                placeholder="例如：太书面了，改口语一点，保留原来的例子" @keydown.enter.prevent="applyInstruction" />
-            </label>
-            <div class="row">
-              <button :disabled="playback.revising != null || !editInstruction.trim()" @click="applyInstruction">
-                {{ playback.revising === segment.segment_number ? "正在改写…" : "按意见修改" }}
-              </button>
-              <button :disabled="playback.revising != null || !editText.trim()" @click="saveEditedText">保存我的修改</button>
-              <button v-if="canUndo(segment)" :disabled="playback.revising != null" @click="undoRevision(segment)">撤回上一版</button>
-              <button @click="closeEditor">取消</button>
-            </div>
-            <small class="muted">只改并重合成这一段，其余段不动；旧音频保留 8 小时后自动清理。</small>
-          </div>
+
           <details v-if="segment.audit?.length"><summary>操作记录</summary><pre>{{ JSON.stringify(segment.audit, null, 2) }}</pre></details>
         </article>
         <small>任务 {{ playback.queue.queue_id }} · {{ playback.queue.status }}</small>
@@ -259,11 +205,8 @@ async function exportRecord(record) {
       <div class="row spaced"><h3>完整讲稿</h3><span class="badge">{{ scriptInfo ? scriptInfo.characters + " 字" : (playback.queue.lessons?.length || 0) + " 段" }}</span></div>
       <p class="muted">把各段正文合并成一份，导出后是一个文件，可直接保存或继续修改。</p>
       <div class="row">
-        <button :disabled="scriptBusy" @click="loadFullScript">读取完整讲稿</button>
         <button :disabled="scriptBusy" @click="exportFullScript">导出为文件</button>
-        <button v-if="scriptInfo" @click="scriptOpen = !scriptOpen">{{ scriptOpen ? "收起全文" : "展开全文" }}</button>
       </div>
-      <pre v-if="scriptInfo && scriptOpen">{{ scriptInfo.script }}</pre>
     </div>
     <div v-if="history.length" class="card"><h3>收听记录</h3>
       <AudioHistory :queues="history" :current-id="playback.queue?.queue_id" :busy="playback.restoring" @play="audio.openQueue($event, state.project)" />

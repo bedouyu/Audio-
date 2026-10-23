@@ -2,15 +2,15 @@
 import { computed, ref, watch } from "vue";
 
 const props = defineProps({ segments: Array, busy: Boolean });
-const emit = defineEmits(["save", "undo", "rewrite", "extend"]);
+const emit = defineEmits(["save"]);
 
 const page = ref(0);
 const draft = ref("");
-const whole = ref("");
+const saved = ref("");
 
 const list = computed(() => props.segments || []);
 const current = computed(() => list.value[page.value] || null);
-const dirty = computed(() => (current.value?.script || "").trim() !== draft.value.trim());
+const dirty = computed(() => draft.value.trim() !== saved.value.trim());
 const statusLabel = computed(() => {
   switch (current.value?.status) {
     case "READY": return "已生成音频";
@@ -20,28 +20,24 @@ const statusLabel = computed(() => {
     default: return "";
   }
 });
-const canUndo = computed(() => (current.value?.audit || []).some((entry) => entry.action === "REVISE_SCRIPT"));
 
 watch(list, (values) => { if (page.value >= values.length) page.value = 0; }, { immediate: true });
-watch(current, (segment) => { draft.value = segment?.script || ""; }, { immediate: true });
+watch(current, (segment) => {
+  saved.value = segment?.script || "";
+  draft.value = saved.value;
+}, { immediate: true });
 
-function previousPage() { if (page.value > 0) page.value -= 1; }
-function nextPage() { if (page.value < list.value.length - 1) page.value += 1; }
-function rewrite() {
-  const text = whole.value.trim();
-  if (!text) return;
-  emit("rewrite", text);
-  whole.value = "";
-}
-function extend() {
-  const text = whole.value.trim();
-  if (!text) return;
-  emit("extend", text);
-  whole.value = "";
-}
-function save() {
+// 离开这一页（切页、失焦）时保存，不需要"保存"按钮。
+function flush() {
   if (!current.value || !dirty.value || !draft.value.trim()) return;
+  saved.value = draft.value;
   emit("save", { number: current.value.segment_number, text: draft.value.trim() });
+}
+function turn(delta) {
+  const next = page.value + delta;
+  if (next < 0 || next >= list.value.length) return;
+  flush();
+  page.value = next;
 }
 </script>
 <template>
@@ -51,24 +47,20 @@ function save() {
         <h3>讲稿</h3>
         <span class="muted">
           第 {{ page + 1 }} / {{ list.length }} 段 · {{ (current?.script || "").length }} 字<template v-if="statusLabel"> · {{ statusLabel }}</template>
+          <template v-if="dirty"> · 未保存</template>
+          <template v-else-if="busy"> · 正在重念…</template>
         </span>
       </div>
       <div class="row">
-        <button :disabled="page === 0" @click="previousPage">上一页</button>
-        <button :disabled="page >= list.length - 1" @click="nextPage">下一页</button>
-        <button :disabled="!dirty || busy" @click="save">{{ busy ? "正在重念…" : "保存并重念这段" }}</button>
-        <button v-if="canUndo" :disabled="busy" @click="emit('undo', current.segment_number)">撤回上一版</button>
-        <small v-if="dirty" class="muted">有未保存的修改</small>
+        <button :disabled="page === 0" @click="turn(-1)">上一页</button>
+        <button :disabled="page >= list.length - 1" @click="turn(1)">下一页</button>
+        <small class="muted">直接在稿纸上改，换页或点别处就会保存并重念这一段</small>
       </div>
     </div>
     <div class="notebook-page">
-      <textarea v-model="draft" spellcheck="false" :readonly="busy" aria-label="讲稿正文" />
+      <textarea v-model="draft" spellcheck="false" :readonly="busy"
+        aria-label="讲稿正文" @blur="flush" />
     </div>
-    <form class="whole-rewrite" @submit.prevent="rewrite">
-      <input v-model="whole" :disabled="busy" placeholder="整篇一起改：例如「去掉开场白和串场，只保留英语-汉语-英语两遍-下一句」" />
-      <button type="submit" :disabled="busy || !whole.trim()">{{ busy ? "正在处理…" : "整篇重写" }}</button>
-      <button type="button" :disabled="busy || !whole.trim()" @click="extend">追加一些</button>
-    </form>
   </section>
 </template>
 <style scoped>
@@ -84,8 +76,6 @@ function save() {
   box-shadow: 0 10px 26px #6b5a1f14;
   padding: 10px 16px 10px 68px;
 }
-.whole-rewrite { display: flex; gap: 8px; }
-.whole-rewrite input { flex: 1; min-height: 36px; }
 .notebook-page textarea {
   width: 100%;
   min-height: 300px;

@@ -10,7 +10,7 @@ export function queueMessage(queue) {
   if (!queue) return "";
   const messages = {
     PREPARING: "正在整理内容，尚未完成音频。", GENERATING: "正在准备分段音频…",
-    READY: "文字稿已保存；未完成片段可手动继续生成。", COMPLETE: "音频已准备完成，可以收听。",
+    READY: "文字稿已保存；要合成下一段就跟左边说「继续生成」。", COMPLETE: "音频已准备完成，可以收听。",
     NEEDS_REVIEW: "有结果未知的尝试，先核验原音频或人工重置；不会自动重跑。",
     FAILED: "音频准备失败，请重新提交要求再试一次。", CANCELLED: "任务已取消。",
     LEGACY_READ_ONLY: "旧队列只读：可播放已生成音频，不会按旧快照自动续跑。",
