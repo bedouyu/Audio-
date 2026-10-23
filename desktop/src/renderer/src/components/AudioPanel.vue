@@ -106,6 +106,10 @@ async function saveNotebook(payload) {
   if (!confirm(`保存第 ${payload.number} 段的讲稿，并重新合成这一段？`)) return;
   await props.audio.reviseSegment(payload.number, { text: payload.text });
 }
+async function rewriteWhole(instruction) {
+  if (!confirm("整篇重写讲稿？会重新写回右侧稿子，并只重新合成第 1 段。")) return;
+  await props.audio.rewriteWhole(instruction);
+}
 async function undoNotebook(number) {
   if (!confirm(`把第 ${number} 段改回上一版，并重新合成？`)) return;
   await props.audio.undoRevision(number);
@@ -155,7 +159,7 @@ async function exportRecord(record) {
     </p>
     <template v-if="scriptSegments.length">
       <ScriptNotebook :segments="scriptSegments" :busy="playback.revising != null"
-        @save="saveNotebook" @undo="undoNotebook" />
+        @save="saveNotebook" @undo="undoNotebook" @rewrite="rewriteWhole" />
       <details class="new-audio-entry">
         <summary>＋ 制作一条新音频（换主题或重新生成）</summary>
         <AudioRequestComposer :audio="audio" compact @submit="emit('submit', $event)" />

@@ -235,6 +235,59 @@ public class ContinuousAudioService {
         return store.status(userId, queueId);
     }
 
+    /**
+     * 整篇重写：改格式或结构时用（例如“不要导读，只要英语-汉语-英语两遍-下一句”）。
+     * 结果直接写回同一条音频的同一批分段，然后只重新合成第 1 段，用户确认后再按需生成其余。
+     */
+    public Map<String, Object> rewriteWhole(long userId, String queueId, String instruction) {
+        String request = instruction == null ? "" : instruction.strip();
+        if (request.length() < 2)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "请写下整篇讲稿想怎么改");
+        if (reviser == null)
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿改写不可用，请改为手动编辑后保存");
+        String full = store.fullScript(userId, queueId);
+        if (full.isBlank())
+            throw new ApiException(HttpStatus.BAD_REQUEST, "这条音频还没有讲稿，不能整篇重写");
+        int parts = Math.max(1, ((Number) store.status(userId, queueId).get("total_segments")).intValue());
+        String rewritten = reviser.rewriteWhole(full, request).strip();
+        if (rewritten.length() < 10 || rewritten.length() > 60_000)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "重写后的讲稿需为 10 到 60000 个字符");
+        String language = SpeechService.detectLanguage(full);
+        if (!language.equals(SpeechService.detectLanguage(rewritten)))
+            throw new ApiException(HttpStatus.BAD_REQUEST, "重写后的语言和原文不一致，请保持同一种语言");
+        var outcome = store.replaceScripts(userId, queueId, splitInto(rewritten, parts));
+        if (retention != null && outcome.get("retired") instanceof List<?> retired)
+            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
+        generate(userId, queueId, 1);
+        return store.status(userId, queueId);
+    }
+
+    /** 把整篇文本按句子边界均匀装进 parts 段，尽量保持用户熟悉的页数。 */
+    static List<String> splitInto(String script, int parts) {
+        String text = script == null ? "" : script.strip();
+        if (text.isEmpty()) return List.of();
+        if (parts <= 1) return List.of(text);
+        List<String> sentences = new ArrayList<>();
+        for (String piece : text.split("(?<=[。！？!?；;])|\\n\\s*\\n")) {
+            String trimmed = piece.strip();
+            if (!trimmed.isEmpty()) sentences.add(trimmed);
+        }
+        if (sentences.size() <= 1) return List.of(text);
+        int target = Math.max(1, (int) Math.ceil(text.length() / (double) parts));
+        List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String sentence : sentences) {
+            if (current.length() > 0 && current.length() + sentence.length() > target
+                    && result.size() < parts - 1) {
+                result.add(current.toString().strip());
+                current.setLength(0);
+            }
+            current.append(sentence);
+        }
+        if (current.length() > 0) result.add(current.toString().strip());
+        return result.isEmpty() ? List.of(text) : result;
+    }
+
     /** 撤回上一版讲稿：把这一段改回上一次修订前的文字，并重新合成这一段。 */
     public Map<String, Object> undoRevision(long userId, String queueId, int number) {
         String previous = store.previousScript(userId, queueId, number)

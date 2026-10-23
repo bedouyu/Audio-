@@ -272,6 +272,56 @@ public class ContinuousAudioStore {
         return segment(queue, number).getScript();
     }
 
+    /** 整篇讲稿（按段拼接），作为整篇重写的基线。 */
+    @Transactional
+    public String fullScript(long userId, String queueId) {
+        required(userId, queueId);
+        return segments.findByQueueIdOrderBySegmentNumberAsc(queueId).stream()
+                .map(ContinuousAudioSegment::getScript)
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+    }
+
+    /**
+     * 整篇重写：把新的分段文本写回同一条音频。
+     * 段数不变时逐段替换，多出来的段落删除、缺少的补建；被替换的段落回到 PENDING 等待重新合成，
+     * 旧音频编号进 retired 由保留策略清理。正在合成时拒绝，避免和合成线程抢同一行。
+     */
+    @Transactional
+    public Map<String, Object> replaceScripts(long userId, String queueId, List<String> scripts) {
+        var queue = required(userId, queueId);
+        reconcile(queue);
+        if ("GENERATING".equals(queue.getStatus()))
+            throw conflict("正在合成音频，等这一段完成后再整篇重写");
+        if (scripts == null || scripts.isEmpty() || scripts.size() > 200
+                || scripts.stream().anyMatch(script -> script == null || script.isBlank()))
+            throw new IllegalArgumentException("整篇讲稿内容无效");
+        List<ContinuousAudioSegment> existing = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
+        List<String> retired = new ArrayList<>();
+        for (int index = 0; index < scripts.size(); index++) {
+            String script = scripts.get(index).strip();
+            String hash = Hashing.sha256(script);
+            if (index < existing.size()) {
+                ContinuousAudioSegment segment = existing.get(index);
+                if (script.equals(segment.getScript())) continue;
+                retired.add(segment.getAudioId());
+                if (segment.getRecordId() != null) records.deleteProjectRecord(segment.getRecordId());
+                segment.revise(script, hash, UUID.randomUUID().toString());
+            } else {
+                segments.save(new ContinuousAudioSegment(queueId, index + 1, script, hash,
+                        UUID.randomUUID().toString()));
+            }
+        }
+        for (int index = scripts.size(); index < existing.size(); index++) {
+            ContinuousAudioSegment extra = existing.get(index);
+            retired.add(extra.getAudioId());
+            if (extra.getRecordId() != null) records.deleteProjectRecord(extra.getRecordId());
+            segments.delete(extra);
+        }
+        queue.clearError();
+        refreshQueueStatus(queue);
+        return Map.of("segments", scripts.size(), "retired", retired);
+    }
+
     /** 取这一段最近一次改稿前的讲稿，用于"撤回上一版"。 */
     @Transactional
     public Optional<String> previousScript(long userId, String queueId, int number) {

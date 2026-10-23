@@ -26,6 +26,15 @@ public class ScriptReviser {
             "4. 直接输出修改后的讲稿全文，不要任何前后缀、解释或引号包裹。",
             "5. 如果修改要求与该段内容无关，就原样返回这段讲稿。");
 
+    private static final String WHOLE_SYSTEM = String.join("\n",
+            "你是音频讲稿的编辑。用户会给你一整篇现有讲稿和一条修改要求。",
+            "规则：",
+            "1. 按修改要求重排整篇：可以删掉不要的部分（比如开场白、串场、结尾总结），也可以调整每句的组织顺序。",
+            "2. 只改被要求改的部分，没提到的内容保持原意和原语言，不要翻译、不要新增解释。",
+            "3. 保持口语讲述风格，不要添加 Markdown、编号列表、括号旁白或任何前后缀说明。",
+            "4. 输出重写后的整篇讲稿正文；段落之间用空行分隔，方便之后再分段。",
+            "5. 严格按修改要求执行，不要因为“看起来更完整”而自行加回被要求删除的内容。");
+
     private final AgentModelGateway model;
 
     public ScriptReviser(AgentModelGateway model) { this.model = model; }
@@ -49,6 +58,31 @@ public class ScriptReviser {
         } catch (RuntimeException failure) {
             log.warn("讲稿改写失败：{}", failure.toString());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿改写失败：" + failure.getMessage());
+        }
+    }
+
+    /**
+     * 整篇重写：用户要改的是格式/结构（去掉开场白、按"英语-汉语-英语"循环等），
+     * 不是局部措辞，所以给它整篇原文并允许它重排内容。分段由调用方负责。
+     */
+    public String rewriteWhole(String script, String instruction) {
+        if (!model.configured())
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "模型未配置，无法按意见重写讲稿；可以手动编辑后保存");
+        var messages = List.of(
+                Map.<String, Object>of("role", "system", "content", WHOLE_SYSTEM),
+                Map.<String, Object>of("role", "user", "content",
+                        "当前整篇讲稿：\n<<<\n" + script + "\n>>>\n\n整篇修改要求：" + instruction));
+        try {
+            var reply = model.decide(messages, List.of(), token -> { }, 240_000L);
+            String text = clean(reply == null ? null : reply.content());
+            if (text.isBlank())
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "模型没有返回重写后的讲稿，请重试或手动编辑");
+            return text;
+        } catch (ApiException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            log.warn("整篇讲稿重写失败：{}", failure.toString());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "整篇讲稿重写失败：" + failure.getMessage());
         }
     }
 

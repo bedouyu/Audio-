@@ -72,6 +72,17 @@
         <finalName>audiorag-backend</finalName>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- 显式钉住 javac：本项目环境里出现过“编译错误被容忍、产物带 Unresolved compilation
+                         problem 直接进 jar”的情况，那种构建必须失败，不能生成能启动一半的包。 -->
+                    <compilerId>javac</compilerId>
+                    <failOnError>true</failOnError>
+                    <showWarnings>true</showWarnings>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>

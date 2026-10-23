@@ -2,10 +2,11 @@
 import { computed, ref, watch } from "vue";
 
 const props = defineProps({ segments: Array, busy: Boolean });
-const emit = defineEmits(["save", "undo"]);
+const emit = defineEmits(["save", "undo", "rewrite"]);
 
 const page = ref(0);
 const draft = ref("");
+const whole = ref("");
 
 const list = computed(() => props.segments || []);
 const current = computed(() => list.value[page.value] || null);
@@ -26,6 +27,12 @@ watch(current, (segment) => { draft.value = segment?.script || ""; }, { immediat
 
 function previousPage() { if (page.value > 0) page.value -= 1; }
 function nextPage() { if (page.value < list.value.length - 1) page.value += 1; }
+function rewrite() {
+  const text = whole.value.trim();
+  if (!text) return;
+  emit("rewrite", text);
+  whole.value = "";
+}
 function save() {
   if (!current.value || !dirty.value || !draft.value.trim()) return;
   emit("save", { number: current.value.segment_number, text: draft.value.trim() });
@@ -51,6 +58,10 @@ function save() {
     <div class="notebook-page">
       <textarea v-model="draft" spellcheck="false" :readonly="busy" aria-label="讲稿正文" />
     </div>
+    <form class="whole-rewrite" @submit.prevent="rewrite">
+      <input v-model="whole" :disabled="busy" placeholder="整篇一起改：例如「去掉开场白和串场，只保留英语-汉语-英语两遍-下一句」" />
+      <button type="submit" :disabled="busy || !whole.trim()">{{ busy ? "正在重写…" : "整篇重写" }}</button>
+    </form>
   </section>
 </template>
 <style scoped>
@@ -66,6 +77,8 @@ function save() {
   box-shadow: 0 10px 26px #6b5a1f14;
   padding: 10px 16px 10px 68px;
 }
+.whole-rewrite { display: flex; gap: 8px; }
+.whole-rewrite input { flex: 1; min-height: 36px; }
 .notebook-page textarea {
   width: 100%;
   min-height: 300px;

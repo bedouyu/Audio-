@@ -87,6 +87,46 @@ class ContinuousAudioReviseScriptTest {
         assertThat(store.segmentScript(1, fixture.queue().getId(), 1)).isEqualTo(fixture.segment().getScript());
     }
 
+    @Test void replaceScriptsRewritesEverySegmentInPlaceAndResetsAudio() {
+        Fixture fixture = fixture();
+        fixture.segment().ready("/media/" + fixture.segment().getAudioId() + ".wav", 42L);
+        String oldAudioId = fixture.segment().getAudioId();
+
+        var outcome = store.replaceScripts(1, fixture.queue().getId(),
+                List.of("第一段重写后的内容。", "第二段重写后的内容。"));
+
+        List<ContinuousAudioSegment> saved = org.mockito.ArgumentCaptor
+                .forClass(ContinuousAudioSegment.class).getAllValues() == null ? List.of() : List.of();
+        assertThat(fixture.segment().getScript()).isEqualTo("第一段重写后的内容。");
+        assertThat(fixture.segment().getStatus()).isEqualTo("PENDING");
+        assertThat(fixture.segment().getAudioId()).isNotEqualTo(oldAudioId);
+        assertThat(outcome.get("segments")).isEqualTo(2);
+        assertThat(outcome.get("retired").toString()).contains(oldAudioId);
+        verify(segments).save(any(ContinuousAudioSegment.class));
+    }
+
+    @Test void fullScriptJoinsSegments() {
+        Fixture fixture = fixture();
+
+        assertThat(store.fullScript(1, fixture.queue().getId())).contains("A short script.");
+    }
+
+    @Test void replaceScriptsRejectsEmptyContent() {
+        Fixture fixture = fixture();
+
+        assertThatThrownBy(() -> store.replaceScripts(1, fixture.queue().getId(), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test void splitIntoKeepsSentenceBoundariesAndPageCount() {
+        String text = "第一句。第二句。第三句。第四句。";
+
+        List<String> parts = ContinuousAudioService.splitInto(text, 2);
+
+        assertThat(parts).hasSize(2);
+        assertThat(String.join("", parts)).isEqualTo(text);
+        assertThat(parts).allSatisfy(part -> assertThat(part).endsWith("。"));
+    }
     private Fixture fixture() {
         String id = UUID.randomUUID().toString();
         var command = new QueueCommand("Topic", 7, 3, 1, "", "", 1, UUID.randomUUID().toString());
