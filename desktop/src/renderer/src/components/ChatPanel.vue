@@ -6,7 +6,7 @@ import MemoryDecision from "./MemoryDecision.vue";
 import ModelBudgetDecision from "./ModelBudgetDecision.vue";
 import { memoryLabels } from "../../../shared/memory-trace.js";
 const props = defineProps({ workspace: Object });
-const emit = defineEmits(["trace", "show-artifacts"]);
+const emit = defineEmits(["trace", "show-artifacts", "answered"]);
 const { state, api, refreshProject } = props.workspace;
 const input = ref("");
 const messages = ref([]);
@@ -149,6 +149,7 @@ async function send() {
             messages.value[index].failed = true;
           }
           emit("trace", event.data.trace || []);
+          emit("answered", event.data);
         }
       },
     );

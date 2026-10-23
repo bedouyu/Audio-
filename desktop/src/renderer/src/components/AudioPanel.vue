@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Headphones, Play } from "lucide-vue-next";
 import { canRefill } from "../../../shared/audio-queue-policy.js";
 import AudioRequestComposer from "./AudioRequestComposer.vue";
@@ -99,6 +99,12 @@ const sources = computed(() => {
 });
 function openSource(source) { if (/^https?:\/\//.test(source || "")) window.audioAgent.openSource(source); }
 // 讲稿以"记事本"形式常驻在右侧：分页浏览、直接编辑，保存后只重念这一段。
+let idleTimer = null;
+onMounted(() => {
+  // agent 可能在对话里改了讲稿：每 10 秒轻量对齐一次，静止时几乎无开销。
+  idleTimer = setInterval(() => { if (document.visibilityState === "visible") props.audio.refresh(); }, 10000);
+});
+onBeforeUnmount(() => { if (idleTimer) clearInterval(idleTimer); });
 const scriptSegments = computed(() => (playback.queue?.segments || []).filter(segment => segment.script));
 const readyCount = computed(() => (playback.queue?.segments || []).filter(s => s.status === "READY").length);
 const pendingCount = computed(() => (playback.queue?.segments || []).filter(s => s.status === "PENDING").length);

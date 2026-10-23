@@ -261,6 +261,7 @@ onMounted(async () => {
         :key="state.project.id"
         @trace="trace = $event"
         @show-artifacts="tab = 'agent'"
+        @answered="audio.refresh()"
       />
       <div class="content-pane">
         <KnowledgePanel

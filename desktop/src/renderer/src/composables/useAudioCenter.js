@@ -327,6 +327,26 @@ export function useAudioCenter(workspace) {
       state.revising = null;
     }
   }
+  /**
+   * 重新拉一次当前队列：agent 在对话里改了讲稿、换了音色时，界面不会自动收到推送，
+   * 靠这个把右侧稿子对齐到服务端的最新状态（失败不打断播放）。
+   */
+  async function refresh() {
+    const id = state.queue?.queue_id;
+    if (!id) return;
+    try {
+      const queue = await api("/api/v1/continuous-audio/" + encodeURIComponent(id));
+      if (!queue || !queue.queue_id) return;
+      const changed = JSON.stringify(queue.segments || []) !== JSON.stringify(state.queue?.segments || []);
+      state.queue = queue;
+      updateHistory(queue);
+      save();
+      if (changed) { state.error = ""; }
+      if (["GENERATING", "PREPARING"].includes(queue.status)) startPolling();
+    } catch (error) {
+      // 刷新是尽力而为：网络抖动时保持当前画面。
+    }
+  }
   /** 整篇重写：按意见重排整篇讲稿，直接写回右侧稿子，并只重新合成第 1 段。 */
   async function rewriteWhole(instruction) {
     const id = state.queue?.queue_id;
@@ -466,7 +486,7 @@ export function useAudioCenter(workspace) {
       for (const action of ["play", "pause", "nexttrack", "previoustrack"]) navigator.mediaSession.setActionHandler(action, null);
     }
   });
-  return { state, current, source, total, message, bindPlayer, submit, poll, refill, revoice, reviseSegment, rewriteWhole, undoRevision, refreshVoices, next, previous,
+  return { state, current, source, total, message, bindPlayer, submit, poll, refresh, refill, revoice, reviseSegment, rewriteWhole, undoRevision, refreshVoices, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
     openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
 }
