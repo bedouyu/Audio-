@@ -272,6 +272,21 @@ public class ContinuousAudioStore {
         return segment(queue, number).getScript();
     }
 
+    /** 取这一段最近一次改稿前的讲稿，用于"撤回上一版"。 */
+    @Transactional
+    public Optional<String> previousScript(long userId, String queueId, int number) {
+        var queue = required(userId, queueId);
+        var segment = segment(queue, number);
+        List<Map<String, Object>> entries = json.readValue(segment.getAuditJson(), List.class);
+        for (int index = entries.size() - 1; index >= 0; index--) {
+            Map<String, Object> entry = entries.get(index);
+            if (!"REVISE_SCRIPT".equals(entry.get("action"))) continue;
+            Object previous = entry.get("previous_script");
+            if (previous instanceof String text && !text.isBlank()) return Optional.of(text);
+        }
+        return Optional.empty();
+    }
+
     public Optional<Map<String, Object>> statusIfPresent(long userId, String queueId) {
         var current = queues.findById(queueId).orElse(null);
         if (current == null) return Optional.empty();

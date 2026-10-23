@@ -166,6 +166,14 @@ public class AiController {
                 text == null ? null : String.valueOf(text));
     }
 
+    /** 撤回上一版讲稿：改回上一次修订前的文字并重新合成这一段。 */
+    @PostMapping("/api/v1/continuous-audio/{queueId}/segments/{number}/undo")
+    public Map<String, Object> undoRevision(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @PathVariable int number) {
+        return continuousAudio.undoRevision(userId(authorization), queueId, number);
+    }
+
     @PostMapping("/api/v1/continuous-audio/{queueId}/refill")
     public Map<String, Object> refill(
             @RequestHeader(value = "Authorization", required = false) String authorization,

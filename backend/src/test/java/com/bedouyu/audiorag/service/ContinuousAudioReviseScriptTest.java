@@ -66,6 +66,21 @@ class ContinuousAudioReviseScriptTest {
         verify(records, never()).deleteProjectRecord(anyLong());
     }
 
+    @Test void previousScriptReturnsTheTextBeforeTheLastRevision() {
+        Fixture fixture = fixture();
+        String original = fixture.segment().getScript();
+        store.reviseScript(1, fixture.queue().getId(), 1, "第一版改稿的文字内容。", "第一版");
+        store.reviseScript(1, fixture.queue().getId(), 1, "第二版改稿的文字内容。", "第二版");
+
+        assertThat(store.previousScript(1, fixture.queue().getId(), 1)).contains("第一版改稿的文字内容。");
+        assertThat(store.previousScript(1, fixture.queue().getId(), 1)).isNotEqualTo(java.util.Optional.of(original));
+    }
+
+    @Test void previousScriptIsEmptyWithoutAnyRevision() {
+        Fixture fixture = fixture();
+
+        assertThat(store.previousScript(1, fixture.queue().getId(), 1)).isEmpty();
+    }
     @Test void segmentScriptReturnsTheCurrentText() {
         Fixture fixture = fixture();
 

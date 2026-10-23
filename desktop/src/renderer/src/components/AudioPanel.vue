@@ -84,6 +84,12 @@ async function saveEditedText() {
   if (!confirm(`保存第 ${number} 段的手工修改，并重新合成这一段？`)) return;
   if (await props.audio.reviseSegment(number, { text })) closeEditor();
 }
+/** 撤回上一版：把这一段改回修订前的文字（旧稿在审计里，再点一次可以回到被撤回的版本）。 */
+async function undoRevision(segment) {
+  if (!confirm(`把第 ${segment.segment_number} 段改回上一版，并重新合成？`)) return;
+  if (await props.audio.undoRevision(segment.segment_number)) closeEditor();
+}
+const canUndo = (segment) => (segment.audit || []).some(entry => entry.action === "REVISE_SCRIPT");
 const records = computed(() => state.records.filter(item => item.record_type === "lesson" && item.metadata?.audio_url));
 const history = computed(() => playback.history.filter(item => item.project_id === state.project?.id));
 const sources = computed(() => {
@@ -195,6 +201,7 @@ async function exportRecord(record) {
                 {{ playback.revising === segment.segment_number ? "正在改写…" : "按意见修改" }}
               </button>
               <button :disabled="playback.revising != null || !editText.trim()" @click="saveEditedText">保存我的修改</button>
+              <button v-if="canUndo(segment)" :disabled="playback.revising != null" @click="undoRevision(segment)">撤回上一版</button>
               <button @click="closeEditor">取消</button>
             </div>
             <small class="muted">只改并重合成这一段，其余段不动；旧音频保留 8 小时后自动清理。</small>

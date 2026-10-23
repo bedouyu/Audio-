@@ -235,6 +235,21 @@ public class ContinuousAudioService {
         return store.status(userId, queueId);
     }
 
+    /** 撤回上一版讲稿：把这一段改回上一次修订前的文字，并重新合成这一段。 */
+    public Map<String, Object> undoRevision(long userId, String queueId, int number) {
+        String previous = store.previousScript(userId, queueId, number)
+                .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "这一段还没有可撤回的改稿"));
+        String current = store.segmentScript(userId, queueId, number);
+        var outcome = store.reviseScript(userId, queueId, number, previous, "撤回上一版");
+        if (retention != null && outcome.get("retired") instanceof List<?> retired)
+            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
+        generate(userId, queueId, 1);
+        var result = new java.util.LinkedHashMap<String, Object>(store.status(userId, queueId));
+        result.put("restored_from_characters", current.length());
+        result.put("restored_characters", previous.length());
+        return result;
+    }
+
     public Map<String, Object> refill(long userId, String queueId) {
         var current = store.statusIfPresent(userId, queueId);
         if (current.isEmpty()) {
