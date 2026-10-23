@@ -34,6 +34,7 @@ public class NativeFunctionCallingGateway implements AgentModelGateway {
     private String reviewModel = "";
     private final ThreadLocal<Map<String, Object>> observation = ThreadLocal.withInitial(Map::of);
     private final Set<InputStream> activeStreams = ConcurrentHashMap.newKeySet();
+    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger(NativeFunctionCallingGateway.class);
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ScheduledExecutorService timers = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "agent-model-timeout"); thread.setDaemon(true); return thread;
@@ -214,9 +215,18 @@ public class NativeFunctionCallingGateway implements AgentModelGateway {
             // 取消优先于超时；没有超时原因且截止时间尚未到的异常仍归因于连接/输出流失败。
             if (deadline - System.nanoTime() <= 0 || causedByTimeout(exception))
                 throw new IllegalStateException("Agent 模型调用超时", exception);
-            throw new IllegalStateException("Agent 模型连接或输出流失败", exception);
+            // 把底层原因写进消息并落日志：只留一句"连接失败"会让事后无法判断是断流、重置还是 TLS/代理问题。
+            String cause = exception.getClass().getSimpleName()
+                    + (exception.getMessage() == null ? "" : "：" + exception.getMessage());
+            LOGGER.warn("模型流中断（{}）：{}", modelName, cause);
+            throw new IllegalStateException("Agent 模型连接或输出流失败（" + clip(cause, 200) + "）", exception);
         }
     }
+
+    private static String clip(String value, int limit) {
+        return value.length() <= limit ? value : value.substring(0, limit);
+    }
+
     static boolean causedByTimeout(Throwable failure) {
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cause = failure; cause != null && visited.add(cause); cause = cause.getCause()) {
