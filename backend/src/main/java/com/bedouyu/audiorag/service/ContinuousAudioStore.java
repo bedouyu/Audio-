@@ -214,12 +214,10 @@ public class ContinuousAudioStore {
             throw conflict("正在生成内容，请等这批片段完成后再换音色");
         if ("CANCELLED".equals(queue.getStatus())) throw conflict("已取消的任务不能换音色");
         var values = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
-        if (values.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus())))
-            throw conflict("有片段正在合成，请等它结束或先核验结果");
-        // 已完成的片段直接换音色；结果显示未知的片段也允许重念——那是用户明确要求丢弃这次结果。
-        var rearmable = values.stream()
-                .filter(s -> "READY".equals(s.getStatus()) || "NEEDS_REVIEW".equals(s.getStatus())).toList();
-        if (rearmable.isEmpty()) throw conflict("还没有可以重念的片段，先等第一段生成完成");
+        // 只要片段已经有讲稿，就允许用新音色直接重念：已完成、结果未知，甚至还没开始合成
+        // （例如服务被中断后留下的 PENDING）都算。正在合成中的片段不抢。
+        var rearmable = values.stream().filter(s -> !"SYNTHESIZING".equals(s.getStatus())).toList();
+        if (rearmable.isEmpty()) throw conflict("这段音频正在合成，请等它结束后再换音色");
         List<String> retired = new ArrayList<>();
         for (var segment : rearmable) {
             String nextAudioId = UUID.randomUUID().toString();

@@ -117,7 +117,7 @@ async function exportRecord(record) {
       </div>
       <p v-if="canRevoice" class="muted">
         <template v-if="revoiceBlocked">正在生成内容，等这批片段完成后再换音色。</template>
-        <template v-else-if="revoiceStartsOver">这段音频上次没有成功生成，换音色会从头重念全部片段。</template>
+        <template v-else-if="revoiceStartsOver">这段音频还没有可用的声音（上次失败或被中断），换音色会直接按已有讲稿重新合成全部片段。</template>
         <template v-else>讲稿与内容不变，只重新合成语音；原音色的音频保留 8 小时后自动清理。</template>
       </p>
       <details v-if="current?.script"><summary>查看当前文字稿</summary><pre>{{ current.script }}</pre></details>

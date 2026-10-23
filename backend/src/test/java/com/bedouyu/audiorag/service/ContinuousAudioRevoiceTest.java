@@ -58,12 +58,17 @@ class ContinuousAudioRevoiceTest {
         verify(records, never()).deleteProjectRecord(anyLong());
     }
 
-    @Test void revoiceNeedsAtLeastOneFinishedSegment() {
+    @Test void revoiceCanRestartSegmentsThatNeverStartedSynthesizing() {
         Fixture fixture = fixture();
+        String oldAudioId = fixture.segment().getAudioId();
 
-        assertThatThrownBy(() -> store.revoice(1, fixture.queue().getId(), "voice-b", commandJson("voice-b")))
-                .isInstanceOf(ApiException.class)
-                .hasMessageContaining("可以重念的片段");
+        // 服务中断会留下"READY + 全 PENDING"的队列：这种情况下也要能直接换音色重念。
+        var outcome = store.revoice(1, fixture.queue().getId(), "voice-b", commandJson("voice-b"));
+
+        assertThat(fixture.segment().getStatus()).isEqualTo("PENDING");
+        assertThat(fixture.segment().getAudioId()).isNotEqualTo(oldAudioId);
+        assertThat(outcome.get("segments")).isEqualTo(1);
+        assertThat(outcome.get("retired")).isEqualTo(List.of(oldAudioId));
     }
 
     @Test void revoiceCanDiscardSegmentsWhoseResultIsUnknown() {
