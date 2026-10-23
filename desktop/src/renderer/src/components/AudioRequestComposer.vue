@@ -40,7 +40,7 @@ function voiceLanguage(voice) {
     <form class="listening-composer" @submit.prevent="submit">
       <label class="sr-only" for="listening-instruction">你想听什么</label>
       <textarea id="listening-instruction" ref="field" v-model="instruction" maxlength="4000" :rows="compact ? 3 : 4"
-        placeholder="告诉我你想听什么，也可以说明语言、时长和表达方式…"
+        :placeholder="compact ? '要做一条新音频就写在这里：主题、语言、时长。改现有讲稿请直接在稿纸上编辑，或在左侧对话里说。' : '告诉我你想听什么，也可以说明语言、时长和表达方式…'"
         :disabled="playback.submitting" @keydown.enter.exact.prevent="submit" />
       <div class="listening-composer-bottom">
         <span><Headphones :size="15" /> 一句话，开始收听</span>

@@ -149,10 +149,20 @@ async function exportRecord(record) {
     <ReasonDialog :open="!!resetTarget" title="重置音频片段" message="旧音频和操作记录会保留。重置后请点击继续生成，才会发起新的合成尝试。"
       @cancel="resetTarget = null" @confirm="reset" />
     <div class="panel-heading"><div><div class="eyebrow">LISTEN & EXPLORE</div><h2>{{ state.project.title }}</h2></div><Headphones :size="26" class="accent" /></div>
-    <p class="muted">继续说出你的要求，会结合这个空间的资料准备内容。</p>
-    <AudioRequestComposer :audio="audio" compact @submit="emit('submit', $event)" />
-    <ScriptNotebook v-if="scriptSegments.length" :segments="scriptSegments"
-      :busy="playback.revising != null" @save="saveNotebook" @undo="undoNotebook" />    <div v-if="active" class="card current-program">
+    <p class="muted">
+      <template v-if="scriptSegments.length">右侧是你的讲稿，可以直接在稿纸上改；要重新做一条音频，展开下面的入口。</template>
+      <template v-else>说一句想听什么，会结合这个空间的资料准备内容。</template>
+    </p>
+    <template v-if="scriptSegments.length">
+      <ScriptNotebook :segments="scriptSegments" :busy="playback.revising != null"
+        @save="saveNotebook" @undo="undoNotebook" />
+      <details class="new-audio-entry">
+        <summary>＋ 制作一条新音频（换主题或重新生成）</summary>
+        <AudioRequestComposer :audio="audio" compact @submit="emit('submit', $event)" />
+      </details>
+    </template>
+    <AudioRequestComposer v-else :audio="audio" compact @submit="emit('submit', $event)" />
+    <div v-if="active" class="card current-program">
       <div class="row spaced"><h3>{{ current?.title || (playback.queue.status === "FAILED" ? "音频准备失败" : "正在准备你的音频") }}</h3><span class="badge">{{ playback.queue.lessons?.length || 0 }} 段已就绪</span></div>
       <p>{{ message }}</p>
       <p v-if="playback.instruction" class="muted">你的要求：{{ playback.instruction }}</p>
