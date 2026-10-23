@@ -50,6 +50,32 @@ async function confirmRevoice() {
   await props.audio.revoice(voice.name);
 }
 const active = computed(() => playback.queue && playback.project?.id === state.project?.id);
+// 逐段改讲稿：先打开某段，再按意见改写或直接保存手工文本；只重合成这一段。
+const editing = ref(null);
+const editText = ref("");
+const editInstruction = ref("");
+function openEditor(segment) {
+  editing.value = segment.segment_number;
+  editText.value = segment.script || "";
+  editInstruction.value = "";
+}
+function closeEditor() {
+  editing.value = null;
+}
+async function applyInstruction() {
+  const number = editing.value;
+  const instruction = editInstruction.value.trim();
+  if (!number || !instruction) return;
+  if (!confirm(`让模型按「${instruction}」改写第 ${number} 段？\n\n只改这一段讲稿，改完只重新合成这一段，其余段不动。`)) return;
+  if (await props.audio.reviseSegment(number, { instruction })) closeEditor();
+}
+async function saveEditedText() {
+  const number = editing.value;
+  const text = editText.value.trim();
+  if (!number || !text) return;
+  if (!confirm(`保存第 ${number} 段的手工修改，并重新合成这一段？`)) return;
+  if (await props.audio.reviseSegment(number, { text })) closeEditor();
+}
 const records = computed(() => state.records.filter(item => item.record_type === "lesson" && item.metadata?.audio_url));
 const history = computed(() => playback.history.filter(item => item.project_id === state.project?.id));
 const sources = computed(() => {
@@ -133,6 +159,25 @@ async function exportRecord(record) {
           <p>第 {{ segment.segment_number }} 段 · {{ segment.status }}</p>
           <div v-if="segment.status === 'NEEDS_REVIEW'" class="row">
             <button :disabled="state.busy" @click="recover(segment)">核验原音频并恢复</button><button :disabled="state.busy" @click="resetTarget = segment">重置尝试</button>
+          </div>
+          <div v-if="editing !== segment.segment_number" class="row">
+            <button :disabled="state.busy || playback.revising != null" @click="openEditor(segment)">改这段讲稿</button>
+            <small class="muted">{{ (segment.script || "").length }} 字</small>
+          </div>
+          <div v-else class="script-editor">
+            <label>这段的讲稿<textarea v-model="editText" rows="6" maxlength="20000" /></label>
+            <label>想怎么改（可选）
+              <input v-model="editInstruction" maxlength="300"
+                placeholder="例如：太书面了，改口语一点，保留原来的例子" @keydown.enter.prevent="applyInstruction" />
+            </label>
+            <div class="row">
+              <button :disabled="playback.revising != null || !editInstruction.trim()" @click="applyInstruction">
+                {{ playback.revising === segment.segment_number ? "正在改写…" : "按意见修改" }}
+              </button>
+              <button :disabled="playback.revising != null || !editText.trim()" @click="saveEditedText">保存我的修改</button>
+              <button @click="closeEditor">取消</button>
+            </div>
+            <small class="muted">只改并重合成这一段，其余段不动；旧音频保留 8 小时后自动清理。</small>
           </div>
           <details v-if="segment.audit?.length"><summary>操作记录</summary><pre>{{ JSON.stringify(segment.audit, null, 2) }}</pre></details>
         </article>

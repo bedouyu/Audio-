@@ -153,6 +153,19 @@ public class AiController {
         return continuousAudio.revoice(userId(authorization), queueId, voice == null ? null : String.valueOf(voice));
     }
 
+    /** 在当前讲稿基础上改某一段：给 instruction 由模型改写，或给 text 直接手工修改。 */
+    @PostMapping("/api/v1/continuous-audio/{queueId}/segments/{number}/revise")
+    public Map<String, Object> reviseSegment(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @PathVariable int number,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Object instruction = body == null ? null : body.get("instruction");
+        Object text = body == null ? null : body.get("text");
+        return continuousAudio.reviseSegment(userId(authorization), queueId, number,
+                instruction == null ? null : String.valueOf(instruction),
+                text == null ? null : String.valueOf(text));
+    }
+
     @PostMapping("/api/v1/continuous-audio/{queueId}/refill")
     public Map<String, Object> refill(
             @RequestHeader(value = "Authorization", required = false) String authorization,

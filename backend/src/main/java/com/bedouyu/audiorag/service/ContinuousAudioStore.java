@@ -235,6 +235,43 @@ public class ContinuousAudioStore {
         return Map.of("segments", rearmable.size(), "retired", List.copyOf(retired));
     }
 
+    /**
+     * 按用户意见改写某一段的讲稿：只换这一段，其余段不动，改完重新合成这一段。
+     * 旧讲稿与旧音频编号写进审计，旧音频交给延迟清理。
+     */
+    public Map<String, Object> reviseScript(long userId, String queueId, int number, String script, String note) {
+        var queue = required(userId, queueId);
+        reconcile(queue);
+        if ("GENERATING".equals(queue.getStatus()) || "PREPARING".equals(queue.getStatus()))
+            throw conflict("正在生成内容，请等这批片段完成后再改讲稿");
+        if ("CANCELLED".equals(queue.getStatus())) throw conflict("已取消的任务不能改讲稿");
+        var segment = segment(queue, number);
+        if ("SYNTHESIZING".equals(segment.getStatus())) throw conflict("这一段正在合成，请等它结束后再改");
+        String hash = Hashing.sha256(script);
+        String nextAudioId = UUID.randomUUID().toString();
+        audit(segment, Map.of("action", "REVISE_SCRIPT", "user_id", userId,
+                "previous_script", segment.getScript(), "previous_hash", segment.getScriptHash(),
+                "new_hash", hash, "previous_audio_id", segment.getAudioId(), "new_audio_id", nextAudioId,
+                "note", note == null ? "" : note, "time", Instant.now().toString()));
+        if (segment.getRecordId() != null) records.deleteProjectRecord(segment.getRecordId());
+        String previousAudioId = segment.getAudioId();
+        segment.revise(script, hash, nextAudioId);
+        queue.clearError();
+        refreshQueueStatus(queue);
+        return Map.of("segment", number, "retired", List.of(previousAudioId), "characters", script.length());
+    }
+
+    /**
+     * 读取某段当前讲稿，作为改写的基线。
+     * 注意不能用只读事务：required() 会对队列行加写锁（SELECT ... FOR UPDATE），
+     * 只读事务里执行加锁查询会被数据库拒绝（MySQL 1792）。
+     */
+    @Transactional
+    public String segmentScript(long userId, String queueId, int number) {
+        var queue = required(userId, queueId);
+        return segment(queue, number).getScript();
+    }
+
     public Optional<Map<String, Object>> statusIfPresent(long userId, String queueId) {
         var current = queues.findById(queueId).orElse(null);
         if (current == null) return Optional.empty();
@@ -425,7 +462,8 @@ public class ContinuousAudioStore {
             state.put("script_hash", segment.getScriptHash()); state.put("audio_id", segment.getAudioId());
             state.put("audio_url", segment.getAudioUrl() == null ? "" : segment.getAudioUrl()); state.put("version", segment.getVersion());
             state.put("audit", json.readValue(segment.getAuditJson(), List.class));
-            state.put("error", segment.getLastError() == null ? "" : segment.getLastError()); states.add(state);
+            state.put("error", segment.getLastError() == null ? "" : segment.getLastError());
+            state.put("script", segment.getScript()); states.add(state);
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("queue_id", queue.getId()); result.put("status", queue.getStatus()); result.put("version", queue.getVersion());

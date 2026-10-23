@@ -44,12 +44,17 @@ public class ContinuousAudioService {
     private SpeechRateCalibration calibration = new SpeechRateCalibration();
     /** 换音色后旧音频的延迟清理；手工构造（测试）时不注入也不影响主流程。 */
     private AudioRetention retention;
+    /** 按意见改写讲稿；未注入（测试）时只能手工编辑。 */
+    private ScriptReviser reviser;
 
     @Autowired(required = false)
     void setCalibration(SpeechRateCalibration value) { this.calibration = value; }
 
     @Autowired(required = false)
     void setRetention(AudioRetention value) { this.retention = value; }
+
+    @Autowired(required = false)
+    void setReviser(ScriptReviser value) { this.reviser = value; }
 
     @Autowired
     public ContinuousAudioService(AudioAgent agent, SpeechService speech, ContinuousAudioStore store,
@@ -192,6 +197,42 @@ public class ContinuousAudioService {
             for (Object audioId : retired) retention.retire(String.valueOf(audioId));
         generate(userId, queueId, ((Number) outcome.get("segments")).intValue());
         return status(userId, queueId);
+    }
+
+    /**
+     * 在当前讲稿的基础上改某一段：可以给修改意见（模型改写），也可以直接给新文本（手工编辑）。
+     * 只重合成这一段，其余段不动。
+     */
+    public Map<String, Object> reviseSegment(long userId, String queueId, int number, String instruction, String text) {
+        String current = store.segmentScript(userId, queueId, number);
+        boolean manual = text != null && !text.isBlank();
+        String edited;
+        if (manual) {
+            edited = text.strip();
+        } else {
+            String request = instruction == null ? "" : instruction.strip();
+            if (request.length() < 2) throw new ApiException(HttpStatus.BAD_REQUEST, "请写下想在这段讲稿基础上怎么改");
+            if (reviser == null) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿改写不可用，请改为手动编辑后保存");
+            edited = reviser.revise(current, request).strip();
+        }
+        if (edited.length() < 10 || edited.length() > 20000)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "改后的这段讲稿需为 10 到 20000 个字符");
+        String language = SpeechService.detectLanguage(current);
+        if (!language.equals(SpeechService.detectLanguage(edited)))
+            throw new ApiException(HttpStatus.BAD_REQUEST, "改后的语言和原文不一致，请保持同一种语言");
+        // 长度保护只针对模型改写：手工编辑是用户自己写的，长短由他决定。
+        if (!manual) {
+            double ratio = (double) edited.length() / Math.max(1, current.length());
+            if (ratio < 0.5 || ratio > 2.0)
+                throw new ApiException(HttpStatus.BAD_REQUEST, "改动幅度过大（" + current.length() + " 字 → "
+                        + edited.length() + " 字），请缩小改动范围后重试");
+        }
+        var outcome = store.reviseScript(userId, queueId, number, edited,
+                manual ? "手工编辑" : instruction.strip());
+        if (retention != null && outcome.get("retired") instanceof List<?> retired)
+            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
+        generate(userId, queueId, 1);
+        return store.status(userId, queueId);
     }
 
     public Map<String, Object> refill(long userId, String queueId) {

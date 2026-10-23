@@ -5,7 +5,7 @@ import { listeningContext, listeningSubmission, playbackSize, queueLesson, readP
 export function useAudioCenter(workspace) {
   const { state: workspaceState, api, mediaUrl, refreshProject } = workspace;
   const state = reactive({ queue: null, index: 0, project: null, instruction: "", time: 0, duration: 0,
-    speed: 1, playing: false, submitting: false, refilling: false, revoicing: false, restoring: false, error: "", voices: [], voice: "", voiceStatus: "",
+    speed: 1, playing: false, submitting: false, refilling: false, revoicing: false, revising: null, restoring: false, error: "", voices: [], voice: "", voiceStatus: "",
     history: [], historyStatus: "", progressStatus: "", completed: false });
   const current = computed(() => queueLesson(state.queue, state.index));
   const source = computed(() => mediaUrl(current.value?.audio_url));
@@ -306,7 +306,28 @@ export function useAudioCenter(workspace) {
     state.project = project; state.instruction = ""; state.index = 0; state.time = 0;
     state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = true; state.error = ""; save(); nextTick(attemptPlay);
   }
+  /** 在当前讲稿基础上改某一段：给 instruction 由模型改写，给 text 则直接用手工文本。 */
+  async function reviseSegment(number, payload) {
+    const id = state.queue?.queue_id;
+    if (!id || !number || !payload || state.revising != null) return false;
+    const version = revision;
+    state.revising = number;
+    try {
+      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id)
+        + "/segments/" + number + "/revise", "POST", payload);
+      if (version !== revision) return false;
+      state.queue = result; state.error = ""; startPolling(); save();
+      updateHistory(result);
+      return true;
+    } catch (error) {
+      if (version === revision) state.error = error.message;
+      return false;
+    } finally {
+      state.revising = null;
+    }
+  }
   /** 换音色重念：讲稿与内容不变，只把已有片段用新音色重新合成。 */
+
   async function revoice(voice) {
     const id = state.queue?.queue_id;
     if (!id || !voice) return false;
@@ -405,7 +426,7 @@ export function useAudioCenter(workspace) {
       for (const action of ["play", "pause", "nexttrack", "previoustrack"]) navigator.mediaSession.setActionHandler(action, null);
     }
   });
-  return { state, current, source, total, message, bindPlayer, submit, poll, refill, revoice, refreshVoices, next, previous,
+  return { state, current, source, total, message, bindPlayer, submit, poll, refill, revoice, reviseSegment, refreshVoices, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
     openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
 }

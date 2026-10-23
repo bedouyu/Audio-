@@ -12,8 +12,8 @@ public class ContinuousAudioSegment {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) private Long id;
     @Column(name = "queue_id", nullable = false, length = 36, updatable = false) private String queueId;
     @Column(name = "segment_number", nullable = false, updatable = false) private int segmentNumber;
-    @Column(nullable = false, columnDefinition = "longtext", updatable = false) private String script;
-    @Column(name = "script_hash", nullable = false, length = 64, updatable = false) private String scriptHash;
+    @Column(nullable = false, columnDefinition = "longtext") private String script;
+    @Column(name = "script_hash", nullable = false, length = 64) private String scriptHash;
     @Column(name = "audio_id", nullable = false, length = 36) private String audioId;
     @Column(name = "audio_url", length = 300) private String audioUrl;
     @Column(nullable = false, length = 24) private String status;
@@ -32,6 +32,11 @@ public class ContinuousAudioSegment {
     public void ready(String url, long record) { status = "READY"; audioUrl = url; recordId = record; leaseToken = null; leaseUntil = null; lastError = null; }
     public void uncertain(String error) { status = "NEEDS_REVIEW"; leaseToken = null; leaseUntil = null; lastError = error == null ? "合成结果未知" : error.substring(0, Math.min(1000, error.length())); }
     public void reset(String newAudioId) { audioId = newAudioId; audioUrl = null; status = "PENDING"; leaseToken = null; leaseUntil = null; lastError = null; }
+    /** 按用户意见改写这一段讲稿：文字与哈希一起换新，音频编号重新分配，等待重新合成。 */
+    public void revise(String newScript, String newHash, String newAudioId) {
+        script = newScript; scriptHash = newHash; audioId = newAudioId; audioUrl = null;
+        status = "PENDING"; leaseToken = null; leaseUntil = null; recordId = null; lastError = null;
+    }
     public void audit(String value) { auditJson = value; }
     public Long getId() { return id; } public String getQueueId() { return queueId; } public int getSegmentNumber() { return segmentNumber; }
     public String getScript() { return script; } public String getScriptHash() { return scriptHash; }
