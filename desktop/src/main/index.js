@@ -64,6 +64,14 @@ async function stream(sender, { id, body, token }) {
   const controller = new AbortController();
   active.set(key, controller);
   const timer = setTimeout(() => controller.abort(), 900000);
+  // 服务端可能已经失败但连接没关：只要 90 秒没有新数据就主动中止，避免界面一直停在"正在思考"。
+  let idleTimer = null;
+  let idleFired = false;
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { idleFired = true; controller.abort(); }, 90000);
+  };
+  armIdle();
   try {
     const response = await checked(
       await fetch(url("/api/v1/chat/stream"), {
@@ -83,6 +91,7 @@ async function stream(sender, { id, body, token }) {
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) break;
+      armIdle();
       parse(decoder.decode(chunk.value, { stream: true }));
     }
     parse(decoder.decode());
@@ -90,10 +99,14 @@ async function stream(sender, { id, body, token }) {
     if (!sender.isDestroyed())
       sender.send("stream:event", { id, complete: true });
   } catch (error) {
+    const message = idleFired
+      ? "90 秒没有收到模型的新进展，已中止；可重试，或把指令拆小一些"
+      : error.message;
     if (!sender.isDestroyed())
-      sender.send("stream:event", { id, error: error.message });
+      sender.send("stream:event", { id, error: message });
   } finally {
     clearTimeout(timer);
+    if (idleTimer) clearTimeout(idleTimer);
     controller.abort(); // 协议校验失败时也关闭正文流，不能遗留未消费的连接。
     active.delete(key);
   }

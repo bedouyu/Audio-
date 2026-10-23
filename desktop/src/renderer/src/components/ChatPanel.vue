@@ -64,6 +64,13 @@ async function send() {
   messages.value.push(answer);
   const index = messages.value.length - 1;
   streamId = crypto.randomUUID();
+  // 渲染层自己也兜一层：主进程没及时收尾时，不能让"正在思考"永远转下去。
+  const watchdog = setTimeout(() => {
+    if (!mounted || !busy.value) return;
+    if (streamId) window.audioAgent.cancel(streamId);
+    status.value = "等待超时，已停止这次请求；请重试，或把指令拆小一些";
+    busy.value = false;
+  }, 150000);
   try {
     await window.audioAgent.stream(
       streamId,
@@ -112,6 +119,12 @@ async function send() {
             event.data.artifacts?.length || 0;
           messages.value[index].stats = event.data.stats;
           messages.value[index].taskStatus = event.data.status;
+          // 运行失败时后端只返回 status，没有 answer；必须给出可读的失败原因，不能留空白气泡。
+          if (event.data.status === "FAILED") {
+            messages.value[index].content =
+              messages.value[index].content || "这次没有拿到模型返回（连接或输出流失败），请重试一次。";
+            messages.value[index].failed = true;
+          }
           emit("trace", event.data.trace || []);
         }
       },
@@ -125,6 +138,7 @@ async function send() {
   } catch (error) {
     if (mounted) status.value = error.message;
   } finally {
+    clearTimeout(watchdog);
     if (mounted) {
       busy.value = false;
       streamId = null;
