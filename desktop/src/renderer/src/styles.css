@@ -238,7 +238,8 @@ p {
 }
 .workspace {
   display: grid;
-  grid-template-columns: 220px minmax(390px, 1fr) 365px;
+  /* 左：对话；右：讲稿与音频等内容 */
+  grid-template-columns: 210px 380px minmax(360px, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -437,7 +438,7 @@ pre {
   overflow: auto;
 }
 .chat-pane {
-  border-left: 1px solid #e2e6ec;
+  border-right: 1px solid #e2e6ec;
   background: #fff;
   display: flex;
   flex-direction: column;
@@ -597,7 +598,7 @@ pre {
 }
 @media (max-width: 1200px) {
   .workspace {
-    grid-template-columns: 185px minmax(350px, 1fr) 320px;
+    grid-template-columns: 180px 330px minmax(320px, 1fr);
   }
   .panel {
     padding: 27px 23px;
@@ -682,8 +683,7 @@ pre {
 .listening-home .project-card { padding: 20px; }
 .listening-home .project-card h3 { margin-top: 15px; font-size: 16px; }
 .listening-home .project-card > p { font-size: 12px; overflow-wrap: anywhere; max-height: 66px; overflow: auto; }
-.workspace { grid-template-columns: 220px minmax(0, 1fr); }
-.workspace.with-chat { grid-template-columns: 220px minmax(330px, 1fr) 350px; }
+.workspace { grid-template-columns: 210px 380px minmax(360px, 1fr); }
 .advanced-navigation { margin: 7px 0; }
 .advanced-navigation summary { padding: 9px 10px; font-size: 11px; }
 .advanced-navigation button { width: 100%; margin-top: 3px; }
@@ -724,8 +724,7 @@ pre {
 .player-speed select { padding: 8px; font-size: 12px; }
 .player-detail { font-size: 11px; white-space: nowrap; }
 @media (max-width: 1200px) {
-  .workspace { grid-template-columns: 185px minmax(0, 1fr); }
-  .workspace.with-chat { grid-template-columns: 185px minmax(300px, 1fr) 300px; }
+  .workspace { grid-template-columns: 170px 300px minmax(300px, 1fr); }
   .global-player { padding: 12px 18px; gap: 10px; }
   .player-context { max-width: 235px; }
   .player-detail { display: none; }

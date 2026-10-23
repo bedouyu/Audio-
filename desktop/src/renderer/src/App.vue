@@ -30,7 +30,6 @@ const { state, api, refreshProjects, refreshProject, openProject, safe } =
 const username = ref("");
 const password = ref("");
 const tab = ref("audio");
-const showChat = ref(false);
 const trace = ref([]);
 const health = ref(null);
 async function authenticate(mode) {
@@ -220,7 +219,7 @@ onMounted(async () => {
       @import="importSources"
       @delete="remove"
     />
-    <main v-else class="workspace" :class="{ 'with-chat': showChat }">
+    <main v-else class="workspace">
       <aside class="sidebar">
         <button class="back-button" @click="state.project = null">
           <ArrowLeft :size="16" /> 返回首页
@@ -236,7 +235,6 @@ onMounted(async () => {
             @click="tab = 'knowledge'"
           >
             <Files :size="17" /> 资料</button>
-          <button :class="{ active: showChat }" @click="showChat = !showChat"><Headphones :size="17" /> 问问内容</button>
           <details class="advanced-navigation"><summary>更多工具</summary>
             <button :class="{ active: tab === 'agent' }" @click="tab = 'agent'"><Layers :size="17" /> 制作草稿与产物</button>
             <button :class="{ active: tab === 'plan' }" @click="tab = 'plan'"><ListChecks :size="17" /> 旧学习计划</button>
@@ -258,6 +256,12 @@ onMounted(async () => {
           ><small>你的资料与对话保存在这个空间中</small>
         </div>
       </aside>
+      <ChatPanel
+        :workspace="workspace"
+        :key="state.project.id"
+        @trace="trace = $event"
+        @show-artifacts="tab = 'agent'"
+      />
       <div class="content-pane">
         <KnowledgePanel
           v-show="tab === 'knowledge'"
@@ -328,13 +332,6 @@ onMounted(async () => {
           </details>
         </section>
       </div>
-      <ChatPanel
-        v-if="showChat"
-        :workspace="workspace"
-        :key="state.project.id"
-        @trace="trace = $event"
-        @show-artifacts="tab = 'agent'"
-      />
     </main>
     <GlobalAudioPlayer v-if="state.user" :audio="audio" @open="open" />
   </div>
