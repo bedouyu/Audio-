@@ -105,7 +105,7 @@ public class AgentRunStore {
         String next = status;
         if (completed.contains(status)) {
             boolean pending = outputs.stream().anyMatch(a -> Set.of("SCRIPT_DRAFT", "LEARNING_PLAN").contains(a.get("kind"))
-                    && !Set.of("READY", "APPLIED").contains(a.get("status")));
+                    && !Set.of("READY", "APPLIED", "CONSUMED", "SUPERSEDED").contains(a.get("status")));
             next = pending ? "AWAITING_CONFIRMATION" : "SUCCEEDED";
         }
         Map<String, Object> value = result == null ? new LinkedHashMap<>()

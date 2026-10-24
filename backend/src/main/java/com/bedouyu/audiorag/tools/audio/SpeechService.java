@@ -275,10 +275,24 @@ public class SpeechService {
 
     public Path audioFile(String filename) {
         Path file = outputDirectory.resolve(filename).normalize();
-        if (!file.startsWith(outputDirectory) || !Files.isRegularFile(file)) {
+        if (!file.startsWith(outputDirectory)) throw new ApiException(HttpStatus.NOT_FOUND, "音频不存在");
+        if (Files.isRegularFile(file)) return file;
+        // 改稿/换音色会移动旧 WAV；保留窗口内仍应能按原媒体地址回放。
+        Path retired = outputDirectory.resolve("retired");
+        if (!filename.matches("[0-9a-fA-F-]{36}\\.wav") || !Files.isDirectory(retired))
             throw new ApiException(HttpStatus.NOT_FOUND, "音频不存在");
+        long now = java.time.Instant.now().getEpochSecond();
+        String suffix = "_" + filename;
+        try (var files = Files.list(retired)) {
+            return files.filter(Files::isRegularFile).filter(candidate -> {
+                String name = candidate.getFileName().toString();
+                if (!name.endsWith(suffix)) return false;
+                try { return Long.parseLong(name.substring(0, name.length() - suffix.length())) > now; }
+                catch (NumberFormatException invalid) { return false; }
+            }).findFirst().orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "音频不存在或已过保留期"));
+        } catch (IOException failure) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "旧音频暂不可读取");
         }
-        return file;
     }
 
     public void remove(String audioUrl) {

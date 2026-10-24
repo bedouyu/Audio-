@@ -63,6 +63,13 @@ class NaturalAudioRequestIntegrationTest {
             ContinuousAudioStore.Creation creation = call.getArgument(2);
             return queues.status(user, creation.queueId());
         });
+        when(audio.proposeInstruction(anyLong(), anyString(), anyString(), anyString(), anyString())).thenAnswer(call -> {
+            long user = call.getArgument(0);
+            String queue = call.getArgument(1), kind = call.getArgument(3), key = call.getArgument(4);
+            var result = new LinkedHashMap<>(queues.status(user, queue));
+            result.put("script_revision", Map.of("id", key, "queue_id", queue, "kind", kind, "status", "PENDING"));
+            return result;
+        });
     }
 
     @AfterEach void reservingReplayingAndResumingNeverInvokesExternalServices() {
@@ -320,12 +327,13 @@ class NaturalAudioRequestIntegrationTest {
                 .containsEntry("source_start", source.firstChapter().length());
     }
 
-    @Test void anExplicitPreviousQueueEditsTheChosenAudioAndKeepsItsLanguageAndDurationContext() throws Exception {
+    @Test void anExplicitPreviousQueueStagesReviewOnTheChosenAudioInsteadOfCreatingANewQueue() throws Exception {
         long user = user();
         var chosen = post(user, payload("写一个原创英文故事，十分钟", uuid()));
         assertStatus(chosen, 202);
         String chosenQueue = queue(chosen);
         var original = queues.commandForUser(user, chosenQueue);
+        makeReady(user, chosenQueue);
         var latest = post(user, payload("介绍雨声，三分钟，用中文", uuid()));
         assertStatus(latest, 202);
         String latestQueue = queue(latest);
@@ -335,12 +343,19 @@ class NaturalAudioRequestIntegrationTest {
         var edit = payload("短一点", key);
         edit.put("previous_queue_id", chosenQueue);
         var response = post(user, edit);
-        assertStatus(response, 202);
+        assertStatus(response, 200);
+        assertThat(queue(response)).isEqualTo(chosenQueue);
+        assertThat(json.readTree(response.body()).path("action").asText()).isEqualTo("REVIEW");
+        assertThat(json.readTree(response.body()).path("script_revision").path("status").asText()).isEqualTo("PENDING");
         var command = queues.commandForUser(user, queue(response));
         assertThat(command.projectId()).isEqualTo(original.projectId());
-        assertThat(command.courseMinutes()).isEqualTo(5);
-        assertThat(command.context()).containsEntry("previous_queue_id", chosenQueue).containsEntry("language", "en");
-        assertThat(command.instruction()).contains("短一点", "英语");
+        assertThat(command).isEqualTo(original);
+        assertThat(queues.history(user, null)).hasSize(2);
+        verify(audio).proposeInstruction(user, chosenQueue, "短一点", "REWRITE", key);
+        var replay = post(user, edit);
+        assertStatus(replay, 200);
+        assertThat(queue(replay)).isEqualTo(chosenQueue);
+        assertThat(json.readTree(replay.body()).path("action").asText()).isEqualTo("REVIEW");
         var changedReference = new LinkedHashMap<>(edit);
         changedReference.put("previous_queue_id", latestQueue);
         assertStatus(post(user, changedReference), 409);
@@ -350,6 +365,35 @@ class NaturalAudioRequestIntegrationTest {
         foreignEdit.put("previous_queue_id", chosenQueue);
         assertStatus(post(stranger, foreignEdit), 404);
         assertThat(queues.history(stranger, null)).isEmpty();
+    }
+
+    @Test void naturalAppendAlsoStagesReviewAndDoesNotDispatchAnotherAudioRequest() throws Exception {
+        long user = user();
+        var original = post(user, payload("讲一个中文故事", uuid()));
+        String queue = queue(original);
+        makeReady(user, queue);
+        String key = uuid();
+        var request = payload("按这个格式再来几句", key);
+        request.put("previous_queue_id", queue);
+        var response = post(user, request);
+        assertStatus(response, 200);
+        assertThat(queue(response)).isEqualTo(queue);
+        assertThat(json.readTree(response.body()).path("action").asText()).isEqualTo("REVIEW");
+        verify(audio).proposeInstruction(user, queue, "按这个格式再来几句", "EXTEND", key);
+        verify(audio, times(1)).startInstruction(eq(user), any(), any());
+        assertThat(queues.history(user, null)).hasSize(1);
+    }
+
+    @Test void aNewTopicMentioningModificationDoesNotBecomeAnEditOfTheLoadedAudio() throws Exception {
+        long user = user();
+        String previous = queue(post(user, payload("介绍中文故事", uuid())));
+        var request = payload("帮我做一期关于修改个人信息的安全常识", uuid());
+        request.put("previous_queue_id", previous);
+        var response = post(user, request);
+        assertStatus(response, 202);
+        assertThat(json.readTree(response.body()).path("action").asText()).isEqualTo("GENERATE");
+        assertThat(queue(response)).isNotEqualTo(previous);
+        verify(audio, never()).proposeInstruction(anyLong(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test void followUpWithoutAnyPreviousContextReturnsAnActionableValidationError() throws Exception {

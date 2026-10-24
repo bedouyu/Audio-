@@ -88,7 +88,7 @@ public class AiController {
     public Map<String, Object> chat(@RequestHeader(value = "Authorization", required = false) String authorization,
             @Valid @RequestBody ChatRequest request) {
         return agent.chat(userId(authorization),
-                new ChatCommand(request.message(), request.sessionId(), request.projectId(), request.memoryStrategy(), request.requestId(), request.requiredArtifacts()));
+                new ChatCommand(request.message(), request.sessionId(), request.projectId(), request.memoryStrategy(), request.requestId(), request.requiredArtifacts(), false, request.audioQueueId()));
     }
 
     @GetMapping("/api/v1/sessions/{sessionId}/trace")
@@ -162,7 +162,7 @@ public class AiController {
         return continuousAudio.extendWhole(userId(authorization), queueId,
                 instruction == null ? null : String.valueOf(instruction));
     }
-    /** 整篇重写讲稿：改格式或结构时用，结果直接写回这条音频的讲稿。 */
+    /** 整篇重写先生成差异提案，用户确认后应用。 */
     @PostMapping("/api/v1/continuous-audio/{queueId}/rewrite")
     public Map<String, Object> rewriteScript(
             @RequestHeader(value = "Authorization", required = false) String authorization,
@@ -179,17 +179,54 @@ public class AiController {
             @RequestBody(required = false) Map<String, Object> body) {
         Object instruction = body == null ? null : body.get("instruction");
         Object text = body == null ? null : body.get("text");
+        Object expectedHash = body == null ? null : body.get("expected_script_hash");
         return continuousAudio.reviseSegment(userId(authorization), queueId, number,
                 instruction == null ? null : String.valueOf(instruction),
-                text == null ? null : String.valueOf(text));
+                text == null ? null : String.valueOf(text),
+                expectedHash == null ? null : String.valueOf(expectedHash), () -> { });
     }
 
-    /** 撤回上一版讲稿：改回上一次修订前的文字并重新合成这一段。 */
+    /** 撤回上一版先生成差异提案，用户确认后应用。 */
     @PostMapping("/api/v1/continuous-audio/{queueId}/segments/{number}/undo")
     public Map<String, Object> undoRevision(
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @PathVariable String queueId, @PathVariable int number) {
         return continuousAudio.undoRevision(userId(authorization), queueId, number);
+    }
+
+    @GetMapping("/api/v1/continuous-audio/{queueId}/script-revisions")
+    public Map<String, Object> scriptRevisions(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId) {
+        return continuousAudio.scriptRevisions(userId(authorization), queueId);
+    }
+
+    @PostMapping("/api/v1/continuous-audio/{queueId}/script-revisions/{revisionId}/accept")
+    public Map<String, Object> acceptScriptRevision(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @PathVariable String revisionId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return continuousAudio.acceptScriptRevision(userId(authorization), queueId, revisionId,
+                body != null && Boolean.TRUE.equals(body.get("confirmed")),
+                body != null && body.get("voice") instanceof String voice ? voice : null);
+    }
+
+    @PostMapping("/api/v1/continuous-audio/{queueId}/script-revisions/{revisionId}/reject")
+    public Map<String, Object> rejectScriptRevision(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @PathVariable String revisionId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return continuousAudio.rejectScriptRevision(userId(authorization), queueId, revisionId,
+                body != null && Boolean.TRUE.equals(body.get("confirmed")));
+    }
+
+    @PostMapping("/api/v1/continuous-audio/{queueId}/script-revisions/{revisionId}/revert")
+    public Map<String, Object> revertScriptRevision(
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @PathVariable String queueId, @PathVariable String revisionId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return continuousAudio.revertScriptRevision(userId(authorization), queueId, revisionId,
+                body != null && Boolean.TRUE.equals(body.get("confirmed")));
     }
 
     @PostMapping("/api/v1/continuous-audio/{queueId}/refill")

@@ -12,18 +12,18 @@ import com.bedouyu.audiorag.common.ApiException;
 import org.springframework.http.HttpStatus;
 import com.bedouyu.audiorag.core.loop.AudioRetrievalLoop;
 import com.bedouyu.audiorag.memory.MemoryContextService;
-import com.bedouyu.audiorag.memory.ConversationTurnLock;
 import com.bedouyu.audiorag.service.AgentArtifactStore;
 import com.bedouyu.audiorag.service.AgentRequestCoordinator;
 import com.bedouyu.audiorag.service.AgentRunStore;
 import com.bedouyu.audiorag.core.guard.TaskSpecificationResolver;
+import com.bedouyu.audiorag.core.guard.ScriptReviewPolicy;
 import com.bedouyu.audiorag.model.dto.ModelMessage;
 import tools.jackson.databind.ObjectMapper;
 import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import com.bedouyu.audiorag.tools.research.WebSearchService;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +34,6 @@ import org.springframework.stereotype.Service;
 /** Instruction-driven audio; explicit learning plans are one optional capability. */
 @Service
 public class AudioAgent {
-    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AudioAgent.class);
     private final QdrantService qdrant;
     private final AudioRagRepository repository;
     private final WebSearchService webSearch;
@@ -156,13 +155,7 @@ public class AudioAgent {
         // 那几类要做的是“按给定文本变换”，不是开放式创作，也不该把长原文塞进多轮上下文。
         if (orchestrator.available() && command.sourceText() == null
                 && (command.contextScript() == null || command.contextScript().isBlank())) {
-            try {
-                return createCourseViaAgent(userId, command);
-            } catch (RuntimeException error) {
-                // 多智能体失败（轮数/预算/网络）不该让用户拿不到音频：
-                // 退回单次生成，并把原因写进日志，便于分辨哪些请求其实没走成 agent。
-                log.warn("多智能体内容准备失败，退回单次生成：{}", error.getMessage());
-            }
+            return createCourseViaAgent(userId, command);
         }
         var content = prepareContent(command.projectId(), command.topic(), command.instruction(), command.audience(),
                 command.durationMinutes(), command.sourceText(), command.sourceTitle(), command.contextScript(), true);
@@ -171,28 +164,32 @@ public class AudioAgent {
 
     /** 用真实多智能体产出讲稿；没有可朗读的草稿就明确失败，不退回模板或占位内容。 */
     private CoursePlan createCourseViaAgent(long userId, CourseCommand command) {
-        Set<String> before = new HashSet<>();
-        for (var item : artifacts.list(userId, command.projectId())) before.add(String.valueOf(item.get("id")));
-        Map<String, Object> result = null;
+        AtomicReference<String> runId = new AtomicReference<>();
         RuntimeException failure = null;
         try {
             // 音频会被直接合成并播放，所以要求连复核一起产出，不依赖主控自行决定是否复核。
-            result = orchestrator.chat(userId, new ChatCommand(agentTask(command), null, command.projectId(),
-                    null, null, java.util.Set.of("SCRIPT_DRAFT", "REVIEW_REPORT"), true), null, ignored -> { });
+            orchestrator.chat(userId, new ChatCommand(agentTask(command), null, command.projectId(),
+                    null, null, java.util.Set.of("SCRIPT_DRAFT", "REVIEW_REPORT"), true), null, ignored -> { }, runId::set);
         } catch (RuntimeException error) {
             failure = error;
         }
-        Map<?, ?> draft = result == null ? null
-                : draftIn((List<?>) result.getOrDefault("artifacts", List.of()), before);
-        if (draft == null) {
-            // 预算或时限中断时任务会抛错，但写稿可能已经落库；能用的草稿不该被一并丢掉。
-            draft = draftIn(artifacts.list(userId, command.projectId()), before);
+        if (failure instanceof com.bedouyu.audiorag.core.loop.AgentBudget.AgentStopped stopped
+                && !"LIMIT_REACHED".equals(stopped.status())) throw stopped;
+        if (Thread.currentThread().isInterrupted()) {
+            if (failure != null) throw failure;
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "音频内容准备已中断；讲稿保留，未继续合成");
         }
+        // 只读取这次调用创建的任务，不能从项目级前后差集中拾取另一并发请求的讲稿。
+        var outputs = runId.get() == null ? List.<Map<String, Object>>of()
+                : artifacts.forRun(userId, command.projectId(), runId.get());
+        Map<?, ?> draft = draftIn(outputs);
         if (draft == null) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "多智能体内容准备失败，未生成也未合成音频："
-                    + (failure == null || failure.getMessage() == null ? "没有可用讲稿" : failure.getMessage()));
+                    + (failure == null || failure.getMessage() == null ? "没有通过当前版本复核的可用讲稿；已有草稿已保留" : failure.getMessage()));
         }
         String script = String.valueOf(draft.get("content"));
+        verifyLanguage(AudioIntent.resolve(command.instruction() == null || command.instruction().isBlank()
+                ? command.topic() : command.instruction(), command.durationMinutes()), script);
         var citations = new ArrayList<Map<String, Object>>();
         if (draft.get("citations") instanceof List<?> values)
             for (var citation : values)
@@ -207,21 +204,18 @@ public class AudioAgent {
     }
 
     /**
-     * 取本次调用中新产生的讲稿。优先未处理的草稿；预算在修订途中耗尽时，上一版被取代的
-     * 讲稿仍比彻底失败有用——它至少是完整写出来的正文。
+     * 仅交付当前任务中仍有效且复核通过的讲稿。被取代的旧版和未通过复核的正文保留供查看。
      */
-    private Map<?, ?> draftIn(List<?> items, Set<String> before) {
-        Map<?, ?> superseded = null;
+    private Map<?, ?> draftIn(List<?> items) {
         for (var item : items) {
             if (!(item instanceof Map<?, ?> artifact)) continue;
             if (!"SCRIPT_DRAFT".equals(artifact.get("kind"))) continue;
-            if (before.contains(String.valueOf(artifact.get("id")))) continue;
             String script = String.valueOf(artifact.get("content"));
             if (script.isBlank() || "null".equals(script)) continue;
-            if ("DRAFT".equals(artifact.get("status"))) return artifact;
-            if (superseded == null && "SUPERSEDED".equals(artifact.get("status"))) superseded = artifact;
+            if ("DRAFT".equals(artifact.get("status"))
+                    && ScriptReviewPolicy.approvedReviewFor(items, artifact, json).isPresent()) return artifact;
         }
-        return superseded;
+        return null;
     }
 
     /** 把音频请求翻译成主控能执行的任务：保留用户原话，只补服务端已知的时长与受众。 */
@@ -354,7 +348,12 @@ public class AudioAgent {
     }
 
     public record ChatCommand(String message, String sessionId, long projectId, String memoryStrategy,
-                              String requestId, java.util.Set<String> requiredArtifacts, boolean audioRequest) {
+                              String requestId, java.util.Set<String> requiredArtifacts, boolean audioRequest,
+                              String audioQueueId) {
+        public ChatCommand(String message, String sessionId, long projectId, String memoryStrategy,
+                           String requestId, java.util.Set<String> requiredArtifacts, boolean audioRequest) {
+            this(message, sessionId, projectId, memoryStrategy, requestId, requiredArtifacts, audioRequest, null);
+        }
         public ChatCommand(String message, String sessionId, long projectId) { this(message, sessionId, projectId, null, null, null, false); }
         public ChatCommand(String message, String sessionId, long projectId, String memoryStrategy) { this(message, sessionId, projectId, memoryStrategy, null, null, false); }
         public ChatCommand(String message, String sessionId, long projectId, String memoryStrategy,

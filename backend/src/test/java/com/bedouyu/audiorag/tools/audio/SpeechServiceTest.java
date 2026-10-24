@@ -100,6 +100,32 @@ class SpeechServiceTest {
         assertFalse(Files.exists(directory.resolve(id + ".wav")));
     }
 
+    @Test void replacedAudioKeepsItsOriginalMediaAddressDuringRetention() throws IOException {
+        String id = java.util.UUID.randomUUID().toString();
+        Files.write(directory.resolve(id + ".wav"), new byte[] {1, 2, 3});
+        new com.bedouyu.audiorag.service.AudioRetention(directory.toString(), 8).retire(id);
+        var speech = stubSpeech(inventory());
+        Path retained = speech.audioFile(id + ".wav");
+        assertTrue(retained.startsWith(directory.resolve("retired")));
+        assertEquals(3, Files.size(retained));
+    }
+
+    @Test void expiredRetiredAudioIsNotServedEvenBeforeTheNextSweep() throws IOException {
+        String id = java.util.UUID.randomUUID().toString();
+        Path retired = Files.createDirectories(directory.resolve("retired"));
+        Files.write(retired.resolve((java.time.Instant.now().getEpochSecond() - 1) + "_" + id + ".wav"), new byte[] {1});
+        assertThrows(ApiException.class, () -> stubSpeech(inventory()).audioFile(id + ".wav"));
+    }
+
+    @Test void retiredAudioLookupDoesNotAcceptTraversalOrMalformedArchiveNames() throws IOException {
+        String id = java.util.UUID.randomUUID().toString();
+        Path retired = Files.createDirectories(directory.resolve("retired"));
+        Files.write(retired.resolve("invalid_" + id + ".wav"), new byte[] {1});
+        var speech = stubSpeech(inventory());
+        assertThrows(ApiException.class, () -> speech.audioFile(id + ".wav"));
+        assertThrows(ApiException.class, () -> speech.audioFile("../" + id + ".wav"));
+    }
+
     private SpeechService stubSpeech(List<Map<String, Object>> voices) throws IOException {
         return new SpeechService(directory.toString(), directory.resolve("not-invoked.ps1").toString()) {
             @Override

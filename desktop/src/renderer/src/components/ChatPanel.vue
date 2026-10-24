@@ -5,7 +5,9 @@ import RetrievalDecision from "./RetrievalDecision.vue";
 import MemoryDecision from "./MemoryDecision.vue";
 import ModelBudgetDecision from "./ModelBudgetDecision.vue";
 import { memoryLabels } from "../../../shared/memory-trace.js";
-const props = defineProps({ workspace: Object });
+import { chatAudioQueueId } from "../../../shared/audio-center-policy.js";
+import { createRequestWatchdog } from "../../../shared/request-watchdog.js";
+const props = defineProps({ workspace: Object, audio: Object });
 const emit = defineEmits(["trace", "show-artifacts", "answered"]);
 const { state, api, refreshProject } = props.workspace;
 const input = ref("");
@@ -16,7 +18,7 @@ const status = ref("");
 const list = ref(null);
 const stepLabels = {
   model_start: "思考", model_end: "想好了",
-  tool_start: "执行", tool_end: "完成",
+  tool_start: "执行", tool_end: "完成", tool_heartbeat: "处理中",
   delegate_start: "委派", delegate_end: "委派完成",
   artifact: "产物", retrieval: "检索", memory_prepare: "回忆",
   context_budget: "预算检查", task_specification: "拆解任务",
@@ -24,7 +26,7 @@ const stepLabels = {
 };
 function stepIcon(step) {
   if (step.kind === "model_start" || step.kind === "model_end") return "🧠";
-  if (step.kind === "tool_start" || step.kind === "tool_end") return "🔧";
+  if (["tool_start", "tool_end", "tool_heartbeat"].includes(step.kind)) return "🔧";
   if (step.kind === "artifact") return "📄";
   if (step.kind === "delegate_start" || step.kind === "delegate_end") return "🤝";
   return "·";
@@ -48,6 +50,7 @@ const agentLabels = {
 };
 let streamId = null;
 let mounted = true;
+const watchdog = createRequestWatchdog();
 async function scroll() {
   await nextTick();
   if (list.value) list.value.scrollTop = list.value.scrollHeight;
@@ -86,27 +89,34 @@ async function send() {
   const answer = { role: "assistant", content: "", citations: [] };
   messages.value.push(answer);
   const index = messages.value.length - 1;
-  streamId = crypto.randomUUID();
-  // 渲染层自己也兜一层：主进程没及时收尾时，不能让"正在思考"永远转下去。
-  const watchdog = setTimeout(() => {
-    if (!mounted || !busy.value) return;
-    if (streamId) window.audioAgent.cancel(streamId);
-    status.value = "等待超时，已停止这次请求；请重试，或把指令拆小一些";
+  const requestId = crypto.randomUUID();
+  streamId = requestId;
+  const active = () => mounted && watchdog.isCurrent(requestId);
+  // 只在连续 150 秒没有有效进展时停止；长工具处理中的心跳会续期。
+  watchdog.begin(requestId, () => {
+    if (!mounted || streamId !== requestId) return;
+    window.audioAgent.cancel(requestId);
+    status.value = "长时间没有收到新进展，已停止这次请求；请稍后重试。";
+    messages.value[index].content ||= status.value;
+    messages.value[index].failed = true;
+    streamId = null;
     busy.value = false;
-  }, 150000);
+  });
   try {
     await window.audioAgent.stream(
-      streamId,
+      requestId,
       {
         message: text,
         session_id: sessionId.value,
         project_id: state.project.id,
+        audio_queue_id: chatAudioQueueId(props.audio?.state, state.project.id),
         memory_strategy: memoryStrategy.value || undefined,
-        request_id: streamId,
+        request_id: requestId,
       },
       state.token,
       (event) => {
-        if (!mounted) return;
+        if (!active() || !["TOKEN", "STATUS", "TOOL", "ERROR", "RESULT"].includes(event?.type)) return;
+        watchdog.touch(requestId);
         if (event.type === "TOKEN") {
           messages.value[index].content += event.data;
           scroll();
@@ -153,19 +163,22 @@ async function send() {
         }
       },
     );
-    if (mounted) {
+    if (active()) {
       status.value =
         messages.value[index].taskStatus === "AWAITING_CONFIRMATION"
           ? "产物已保存，请在 Agent 产物中审核。"
           : "回答已保存。";
     }
   } catch (error) {
-    if (mounted) status.value = error.message;
+    if (active()) {
+      status.value = error.message;
+      messages.value[index].content ||= error.message;
+      messages.value[index].failed = true;
+    }
   } finally {
-    clearTimeout(watchdog);
-    if (mounted) {
+    if (mounted && watchdog.finish(requestId)) {
       busy.value = false;
-      streamId = null;
+      if (streamId === requestId) streamId = null;
       await refreshProject().catch(() => {});
       await scroll();
     }
@@ -190,7 +203,9 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   mounted = false;
+  watchdog.dispose();
   if (streamId) window.audioAgent.cancel(streamId);
+  streamId = null;
 });
 </script>
 <template>

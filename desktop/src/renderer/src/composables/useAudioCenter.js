@@ -6,7 +6,7 @@ export function useAudioCenter(workspace) {
   const { state: workspaceState, api, mediaUrl, refreshProject } = workspace;
   const state = reactive({ queue: null, index: 0, project: null, instruction: "", time: 0, duration: 0,
     speed: 1, playing: false, submitting: false, refilling: false, revoicing: false, revising: null, restoring: false, error: "", voices: [], voice: "", voiceStatus: "",
-    history: [], historyStatus: "", progressStatus: "", completed: false });
+    history: [], historyStatus: "", progressStatus: "", completed: false, scriptDrafts: {} });
   const current = computed(() => queueLesson(state.queue, state.index));
   const source = computed(() => mediaUrl(current.value?.audio_url));
   const total = computed(() => playbackSize(state.queue));
@@ -16,7 +16,8 @@ export function useAudioCenter(workspace) {
   let owner = null;
   let identity = 0;
   let revision = 0;
-  let pollingId = null;
+  let polling = null;
+  let queueRead = 0;
   let restoredTime = 0;
   let wantsPlay = false;
   let pending = null;
@@ -124,6 +125,7 @@ export function useAudioCenter(workspace) {
   }
   function clear() {
     revision++;
+    queueRead++;
     clearInterval(timer);
     timer = null;
     wantsPlay = false;
@@ -131,7 +133,9 @@ export function useAudioCenter(workspace) {
     if (player) { player.removeAttribute("src"); player.load(); }
     state.queue = null; state.project = null; state.instruction = ""; state.index = 0;
     state.time = 0; state.duration = 0; state.playing = false; state.error = "";
-    state.submitting = false; state.refilling = false; state.restoring = false; restoredTime = 0; pending = null;
+    state.submitting = false; state.refilling = false; state.revising = null; state.revoicing = false;
+    state.restoring = false; restoredTime = 0; pending = null;
+    state.scriptDrafts = {};
     state.progressStatus = ""; state.completed = false; lastProgressAt = 0; lastProgressQueue = null; progressChain = Promise.resolve();
     checkpointSignature = ""; checkpointAt = 0;
     if ("mediaSession" in navigator) {
@@ -144,27 +148,33 @@ export function useAudioCenter(workspace) {
     clearInterval(timer);
     timer = setInterval(() => poll(), 3000);
   }
-  async function poll() {
+  async function poll(quiet = false) {
     const id = state.queue?.queue_id;
-    if (!id || pollingId === id) return;
+    if (!id || workspaceState.user?.id !== owner || state.revising != null || state.revoicing || state.refilling) return;
     const version = revision;
-    pollingId = id;
-    try {
-      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id));
-      if (version !== revision || state.queue?.queue_id !== id) return;
-      const before = state.queue.lessons?.length || 0;
-      state.queue = result;
-      updateHistory(result);
-      if (total.value && state.index >= total.value) state.index = total.value - 1;
-      state.error = "";
-      if (["COMPLETE", "FAILED", "CANCELLED", "LEGACY_READ_ONLY"].includes(result.status)) clearInterval(timer);
-      if ((result.lessons?.length || 0) > before && workspaceState.project?.id === state.project?.id)
-        refreshProject().catch(() => {});
-      if (!state.restoring) save();
-    } catch (error) {
-      if (version === revision) state.error = "读取音频任务失败：" + error.message;
-    } finally {
-      if (pollingId === id) pollingId = null;
+    if (polling?.id === id && polling.version === version) return polling.promise;
+    const ticket = { id, version, read: ++queueRead };
+    polling = ticket;
+    ticket.promise = readQueue();
+    return ticket.promise;
+    async function readQueue() {
+      try {
+        const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id));
+        if (version !== revision || ticket.read !== queueRead || state.queue?.queue_id !== id || result?.queue_id !== id) return;
+        const before = state.queue.lessons?.length || 0;
+        state.queue = result;
+        updateHistory(result);
+        if (total.value && state.index >= total.value) state.index = total.value - 1;
+        state.error = "";
+        if (["COMPLETE", "FAILED", "CANCELLED", "LEGACY_READ_ONLY"].includes(result.status)) clearInterval(timer);
+        if ((result.lessons?.length || 0) > before && workspaceState.project?.id === state.project?.id)
+          refreshProject().catch(() => {});
+        if (!state.restoring) save();
+      } catch (error) {
+        if (!quiet && version === revision && ticket.read === queueRead) state.error = "读取音频任务失败：" + error.message;
+      } finally {
+        if (polling === ticket) polling = null;
+      }
     }
   }
   async function refreshVoices() { await loadVoices(identity); }
@@ -198,10 +208,10 @@ export function useAudioCenter(workspace) {
       state.restoring = true; startPolling(); await poll();
       if (version === revision) await restoreProgress(saved);
     } else {
-      state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1, queue_id: record.metadata?.queue_id, lessons: [saved.record] };
+      state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1, lessons: [saved.record] };
       rememberCheckpoint(saved.savedAt);
     }
-  }, { immediate: true });
+  }, { immediate: true, flush: "sync" });
 
   async function submit(instruction, project = null) {
     if (state.submitting) return null;
@@ -215,9 +225,19 @@ export function useAudioCenter(workspace) {
       if (!result.queue_id || !result.project?.id) throw new Error("任务响应缺少音频队列或内容空间，请更新后端后重试。");
       pending = null;
       if (result.action === "RESUME") { await openQueue(result, result.project, true); return version === identity ? result : null; }
+      if (result.action === "REVIEW") {
+        if (state.queue?.queue_id === result.queue_id) {
+          queueRead++;
+          state.queue = result; state.error = ""; updateHistory(result); startPolling();
+        } else await openQueue(result, result.project, false);
+        if (version !== identity) return null;
+        workspaceState.notice = "修改已准备好，请在讲稿中审阅红绿差异并确认。";
+        return result;
+      }
       save(true); player?.pause(); revision++;
       state.queue = result; state.project = result.project; state.instruction = instruction.trim();
-      state.index = 0; state.time = 0; state.duration = 0; state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = true;
+      state.index = 0; state.time = 0; state.duration = 0; state.refilling = false;
+      state.revising = null; state.revoicing = false; state.completed = false; restoredTime = 0; wantsPlay = true;
       updateHistory(result); startPolling(); save(); await nextTick(); await attemptPlay();
       return result;
     } catch (error) {
@@ -271,6 +291,7 @@ export function useAudioCenter(workspace) {
   async function refill(manual = false, segments = 0) {
     if (state.refilling || !state.queue?.queue_id || !canRefill(state.queue, manual)) return false;
     const version = revision, id = state.queue.queue_id;
+    queueRead++;
     state.refilling = true;
     try {
       const body = segments > 0 ? { segments } : {};
@@ -305,18 +326,25 @@ export function useAudioCenter(workspace) {
     state.queue = { mode: "ARCHIVE", status: "COMPLETE", total_segments: 1, queue_id: record.metadata?.queue_id,
       lessons: [{ title: record.title, script: record.content, audio_url: record.metadata?.audio_url, citations: record.metadata?.citations }] };
     state.project = project; state.instruction = ""; state.index = 0; state.time = 0;
-    state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = true; state.error = ""; save(); nextTick(attemptPlay);
+    state.refilling = false; state.revising = null; state.revoicing = false;
+    state.completed = false; restoredTime = 0; wantsPlay = true; state.error = ""; save(); nextTick(attemptPlay);
   }
-  /** 在当前讲稿基础上改某一段：给 instruction 由模型改写，给 text 则直接用手工文本。 */
-  async function reviseSegment(number, payload) {
-    const id = state.queue?.queue_id;
-    if (!id || !number || !payload || state.revising != null) return false;
+  /** 生成待审修改；确认之前保留当前讲稿与音频。 */
+  async function reviseSegment(number, payload, queueId = state.queue?.queue_id, expectedScriptHash = null) {
+    const id = queueId;
+    if (!id || id !== state.queue?.queue_id || workspaceState.user?.id !== owner
+      || !number || !payload || state.revising != null || state.revoicing) return false;
+    const segment = state.queue.segments?.find(item => item.segment_number === number);
+    if (typeof payload.text === "string" && segment?.script?.trim() === payload.text.trim()) return true;
     const version = revision;
+    queueRead++;
     state.revising = number;
+    state.error = "";
     try {
+      const body = expectedScriptHash ? { ...payload, expected_script_hash: expectedScriptHash } : payload;
       const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id)
-        + "/segments/" + number + "/revise", "POST", payload);
-      if (version !== revision) return false;
+        + "/segments/" + number + "/revise", "POST", body);
+      if (version !== revision || state.queue?.queue_id !== id) return false;
       state.queue = result; state.error = ""; startPolling(); save();
       updateHistory(result);
       return true;
@@ -324,7 +352,7 @@ export function useAudioCenter(workspace) {
       if (version === revision) state.error = error.message;
       return false;
     } finally {
-      state.revising = null;
+      if (version === revision) state.revising = null;
     }
   }
   /**
@@ -332,26 +360,15 @@ export function useAudioCenter(workspace) {
    * 靠这个把右侧稿子对齐到服务端的最新状态（失败不打断播放）。
    */
   async function refresh() {
-    const id = state.queue?.queue_id;
-    if (!id) return;
-    try {
-      const queue = await api("/api/v1/continuous-audio/" + encodeURIComponent(id));
-      if (!queue || !queue.queue_id) return;
-      const changed = JSON.stringify(queue.segments || []) !== JSON.stringify(state.queue?.segments || []);
-      state.queue = queue;
-      updateHistory(queue);
-      save();
-      if (changed) { state.error = ""; }
-      if (["GENERATING", "PREPARING"].includes(queue.status)) startPolling();
-    } catch (error) {
-      // 刷新是尽力而为：网络抖动时保持当前画面。
-    }
+    await poll(true);
+    if (["GENERATING", "PREPARING"].includes(state.queue?.status)) startPolling();
   }
-  /** 整篇重写：按意见重排整篇讲稿，直接写回右侧稿子，并只重新合成第 1 段。 */
+  /** 按意见生成整篇修改，等待用户审阅。 */
   async function rewriteWhole(instruction) {
     const id = state.queue?.queue_id;
-    if (!id || !instruction || state.revising != null) return false;
+    if (!id || !instruction || state.revising != null || state.revoicing) return false;
     const version = revision;
+    queueRead++;
     state.revising = "all";
     try {
       const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/rewrite", "POST", { instruction });
@@ -363,14 +380,15 @@ export function useAudioCenter(workspace) {
       if (version === revision) state.error = error.message;
       return false;
     } finally {
-      state.revising = null;
+      if (version === revision) state.revising = null;
     }
   }
   /** 追加：在现有讲稿后继续写新内容，原有段落不动。 */
   async function extendWhole(instruction) {
     const id = state.queue?.queue_id;
-    if (!id || !instruction || state.revising != null) return false;
+    if (!id || !instruction || state.revising != null || state.revoicing) return false;
     const version = revision;
+    queueRead++;
     state.revising = "all";
     try {
       const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/extend", "POST", { instruction });
@@ -382,14 +400,15 @@ export function useAudioCenter(workspace) {
       if (version === revision) state.error = error.message;
       return false;
     } finally {
-      state.revising = null;
+      if (version === revision) state.revising = null;
     }
   }
-  /** 撤回上一版讲稿：改回上次修订前的文字并重新合成这一段。 */
+  /** 将上一版讲稿作为待审修改，确认后再恢复。 */
   async function undoRevision(number) {
     const id = state.queue?.queue_id;
-    if (!id || !number || state.revising != null) return false;
+    if (!id || !number || state.revising != null || state.revoicing) return false;
     const version = revision;
+    queueRead++;
     state.revising = number;
     try {
       const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id)
@@ -402,16 +421,50 @@ export function useAudioCenter(workspace) {
       if (version === revision) state.error = error.message;
       return false;
     } finally {
-      state.revising = null;
+      if (version === revision) state.revising = null;
     }
   }
+  /** 确认、放弃和撤回都绑定当前展示的队列，重复点击不并发提交。 */
+  async function scriptRevisionAction(action, revisionId, queueId = state.queue?.queue_id, voice) {
+    const id = queueId;
+    if (!id || id !== state.queue?.queue_id || !revisionId || workspaceState.user?.id !== owner
+      || state.revising != null || state.revoicing || state.refilling) return false;
+    const target = state.queue.script_revisions?.find(item => item.id === revisionId);
+    if (!target || target.queue_id !== id
+      || (action === "revert" ? target.status !== "ACCEPTED" : target.status !== "PENDING")) return false;
+    const version = revision;
+    queueRead++;
+    state.revising = "review:" + revisionId;
+    state.error = "";
+    try {
+      const body = { confirmed: true };
+      if (action === "accept" && typeof voice === "string") body.voice = voice;
+      const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id)
+        + "/script-revisions/" + encodeURIComponent(revisionId) + "/" + action, "POST", body);
+      if (version !== revision || state.queue?.queue_id !== id || result?.queue_id !== id) return false;
+      state.queue = result; state.error = "";
+      updateHistory(result); startPolling(); save();
+      workspaceState.notice = result.synthesis_notice || (action === "accept" ? "修改已确认，正在更新受影响的音频。"
+        : action === "reject" ? "已保留原稿。" : "已准备撤回差异，请审阅后确认。");
+      return true;
+    } catch (error) {
+      if (version === revision && state.queue?.queue_id === id) state.error = error.message;
+      return false;
+    } finally {
+      if (version === revision) state.revising = null;
+    }
+  }
+  const acceptScriptRevision = (id, queueId, voice) => scriptRevisionAction("accept", id, queueId, voice);
+  const rejectScriptRevision = (id, queueId) => scriptRevisionAction("reject", id, queueId);
+  const revertScriptRevision = (id, queueId) => scriptRevisionAction("revert", id, queueId);
   /** 换音色重念：讲稿与内容不变，只把已有片段用新音色重新合成。 */
 
   async function revoice(voice) {
     const id = state.queue?.queue_id;
     if (!id || !voice) return false;
-    if (state.revoicing) return false;
+    if (state.revoicing || state.revising != null) return false;
     const version = revision;
+    queueRead++;
     state.revoicing = true;
     try {
       const result = await api("/api/v1/continuous-audio/" + encodeURIComponent(id) + "/revoice", "POST", { voice });
@@ -423,7 +476,7 @@ export function useAudioCenter(workspace) {
       if (version === revision) state.error = error.message;
       return false;
     } finally {
-      state.revoicing = false;
+      if (version === revision) state.revoicing = false;
     }
   }
   async function reviewSegment(segment, reason = null) {
@@ -433,6 +486,7 @@ export function useAudioCenter(workspace) {
     const result = await api(`/api/v1/continuous-audio/${encodeURIComponent(id)}/segments/${segment.segment_number}/${reset ? "reset" : "recover"}`,
       "POST", segmentConfirmation(segment, reason || "", reset));
     if (version !== revision) return;
+    queueRead++;
     state.queue = result; updateHistory(result); startPolling(); save();
   }
   async function openQueue(queue, project = null, play = true) {
@@ -443,7 +497,8 @@ export function useAudioCenter(workspace) {
     state.project = project || queue.project || workspaceState.projects?.find(item => item.id === queue.project_id)
       || { id: queue.project_id, title: queue.title || "音频内容", topic: queue.instruction || "" };
     state.instruction = queue.instruction || ""; state.index = 0; state.time = 0;
-    state.error = ""; state.refilling = false; state.completed = false; restoredTime = 0; wantsPlay = false;
+    state.error = ""; state.refilling = false; state.revising = null; state.revoicing = false;
+    state.completed = false; restoredTime = 0; wantsPlay = false;
     refillInterval = 15000; lastRefillAttempt = 0;
     state.restoring = true; updateHistory(queue);
     let fallback = null;
@@ -507,5 +562,6 @@ export function useAudioCenter(workspace) {
   });
   return { state, current, source, total, message, bindPlayer, submit, poll, refresh, refill, revoice, reviseSegment, rewriteWhole, extendWhole, undoRevision, refreshVoices, next, previous,
     select, loaded, timeUpdate, playChanged, setSpeed, playRecord, reviewSegment, forgetProject, resumeLegacyProject,
-    openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice };
+    openQueue, refreshHistory, save, clear, loadScript, exportScript, importVoice, removeVoice,
+    acceptScriptRevision, rejectScriptRevision, revertScriptRevision };
 }

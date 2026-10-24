@@ -48,7 +48,7 @@ public class GenerateAudioTool implements FunctionTool {
                 if (raw instanceof Map<?, ?> segment && "PENDING".equals(String.valueOf(segment.get("status")))) pending++;
             }
         }
-        int requested = args.path("segments").isMissingNode() ? 0 : args.path("segments").asInt(0);
+        int requested = args.path("segments").isMissingNode() ? 1 : args.path("segments").asInt(0);
         if (pending == 0)
             return Map.of("queue_id", queueId, "status", before.get("status"), "started", 0,
                     "note", "所有片段都已合成，没有待生成的段落");

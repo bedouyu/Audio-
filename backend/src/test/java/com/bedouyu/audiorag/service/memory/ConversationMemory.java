@@ -2,13 +2,11 @@ package com.bedouyu.audiorag.service.memory;
 
 import com.bedouyu.audiorag.model.dto.ModelMessage;
 import com.bedouyu.audiorag.repository.AudioRagRepository;
-import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 旧版窗口基线，仅为兼容已有测试保留。生产聊天已改为有归属校验的MemoryContextService。 */
+/** 仅用于测试比较的旧版窗口基线；生产聊天使用带归属校验的 MemoryContextService。 */
 @Deprecated(forRemoval = false)
-@Service
 public class ConversationMemory {
     private final AudioRagRepository repository;
     public ConversationMemory(AudioRagRepository repository) { this.repository = repository; }

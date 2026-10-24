@@ -32,6 +32,10 @@ public class ContinuousAudioStore {
     private final AudioRagRepository records;
     private final LearningPlanService learning;
     private final ObjectMapper json;
+    private ContinuousAudioScriptRevisionRepository scriptRevisions;
+
+    @Autowired
+    void setScriptRevisions(ContinuousAudioScriptRevisionRepository value) { scriptRevisions = value; }
 
     public ContinuousAudioStore(ContinuousAudioQueueRepository queues, ContinuousAudioSegmentRepository segments,
             LearningProjectRepository projects, AudioRagRepository records, LearningPlanService learning, ObjectMapper json) {
@@ -106,13 +110,19 @@ public class ContinuousAudioStore {
     }
 
     public Optional<Claim> claimNext(long userId, String queueId, String token) {
+        return claimNext(userId, queueId, token, 1);
+    }
+
+    /** 改稿和续写只领取其目标范围，不能误合成前面尚未试听的片段。 */
+    public Optional<Claim> claimNext(long userId, String queueId, String token, int firstSegment) {
         var queue = required(userId, queueId);
         reconcile(queue);
         requireClaim(queue, "GENERATING", token);
         var values = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
         if (values.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus()) || "NEEDS_REVIEW".equals(s.getStatus())))
             throw conflict("前一合成结果尚未确认，不能领取后续片段");
-        var next = values.stream().filter(s -> "PENDING".equals(s.getStatus())).findFirst();
+        var next = values.stream().filter(s -> s.getSegmentNumber() >= firstSegment
+                && "PENDING".equals(s.getStatus())).findFirst();
         if (next.isEmpty()) return Optional.empty();
         Instant until = Instant.now().plus(synthesisLease);
         queue.renew(until);
@@ -240,13 +250,20 @@ public class ContinuousAudioStore {
      * 旧讲稿与旧音频编号写进审计，旧音频交给延迟清理。
      */
     public Map<String, Object> reviseScript(long userId, String queueId, int number, String script, String note) {
+        return reviseScript(userId, queueId, number, script, note, null, () -> { });
+    }
+
+    public Map<String, Object> reviseScript(long userId, String queueId, int number, String script, String note,
+            ScriptRevision expected, Runnable mutationGuard) {
         var queue = required(userId, queueId);
         reconcile(queue);
-        if ("GENERATING".equals(queue.getStatus()) || "PREPARING".equals(queue.getStatus()))
-            throw conflict("正在生成内容，请等这批片段完成后再改讲稿");
-        if ("CANCELLED".equals(queue.getStatus())) throw conflict("已取消的任务不能改讲稿");
+        requireEditable(queue);
         var segment = segment(queue, number);
         if ("SYNTHESIZING".equals(segment.getStatus())) throw conflict("这一段正在合成，请等它结束后再改");
+        requireRevision(queueId, number, expected, List.of(segment));
+        mutationGuard.run();
+        if (script.equals(segment.getScript()))
+            return Map.of("segment", number, "retired", List.of(), "characters", script.length());
         String hash = Hashing.sha256(script);
         String nextAudioId = UUID.randomUUID().toString();
         audit(segment, Map.of("action", "REVISE_SCRIPT", "user_id", userId,
@@ -272,21 +289,248 @@ public class ContinuousAudioStore {
         return segment(queue, number).getScript();
     }
 
+    /** 快照跨越慢模型调用；写回时仍须在同一把队列锁下比较每段版本。 */
+    public ScriptRevision scriptRevision(long userId, String queueId, int number) {
+        var queue = required(userId, queueId);
+        reconcile(queue);
+        requireEditable(queue);
+        var value = segment(queue, number);
+        if ("SYNTHESIZING".equals(value.getStatus())) throw conflict("这一段正在合成，请等它结束后再改");
+        return revision(queueId, number, List.of(value));
+    }
+
+    public ScriptRevision fullScriptRevision(long userId, String queueId) {
+        var queue = required(userId, queueId);
+        reconcile(queue);
+        requireEditable(queue);
+        var values = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
+        if (values.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus())))
+            throw conflict("有片段正在合成，请等它结束后再改讲稿");
+        return revision(queueId, null, values);
+    }
+
+    /** Store the proposed text only. Live segments, playback records and WAVs remain untouched. */
+    public Map<String, Object> proposeScriptRevision(long userId, String queueId, String kind, Integer number,
+            List<String> scripts, String instruction, ScriptRevision baseline, Runnable mutationGuard) {
+        return proposeScriptRevision(userId, queueId, kind, number, scripts, instruction, baseline, mutationGuard, null);
+    }
+
+    public Map<String, Object> proposeScriptRevision(long userId, String queueId, String kind, Integer number,
+            List<String> scripts, String instruction, ScriptRevision baseline, Runnable mutationGuard, String requestKey) {
+        var queue = required(userId, queueId);
+        var replay = existingScriptRevision(userId, queueId, requestKey);
+        if (replay.isPresent()) return replay.get();
+        reconcile(queue);
+        requireEditable(queue);
+        if (!Set.of("REVISE", "REWRITE", "EXTEND", "UNDO").contains(kind)
+                || ("REVISE".equals(kind) && number == null)
+                || (("REWRITE".equals(kind) || "EXTEND".equals(kind)) && number != null)
+                || scripts == null || scripts.isEmpty() || scripts.size() > 200
+                || scripts.stream().anyMatch(value -> value == null || value.isBlank()))
+            throw new ApiException(HttpStatus.BAD_REQUEST, "讲稿修改提案无效");
+        var current = number == null ? segments.findByQueueIdOrderBySegmentNumberAsc(queueId)
+                : List.of(segment(queue, number));
+        requireRevision(queueId, number, Objects.requireNonNull(baseline), current);
+        mutationGuard.run();
+        String proposed = String.join("\n\n", scripts);
+        String after = "EXTEND".equals(kind) ? baseline.script() + "\n\n" + proposed : proposed;
+        boolean unchanged = baseline.script().equals(after);
+        if (unchanged && requestKey == null) return snapshot(queue);
+        if ("EXTEND".equals(kind) && current.size() + scripts.size() > 200)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "讲稿分段总数不能超过 200 段");
+        if (scriptRevisions == null) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿审阅存储尚未就绪");
+        String baselineJson = json.writeValueAsString(baseline);
+        String scriptsJson = json.writeValueAsString(scripts);
+        var existing = scriptRevisions.findTop20ByQueueIdAndStatusOrderByCreatedAtDesc(queueId, "PENDING").stream()
+                .filter(value -> requestKey == null)
+                .filter(value -> "PENDING".equals(value.getStatus()) && kind.equals(value.getKind())
+                        && Objects.equals(number, value.getSegmentNumber()) && baselineJson.equals(value.getBaselineJson())
+                        && scriptsJson.equals(value.getScriptsJson())).findFirst();
+        if (!unchanged && existing.isEmpty() && scriptRevisions.countByQueueIdAndStatus(queueId, "PENDING") >= 20)
+            throw conflict("这份讲稿已有 20 份待确认修改，请先确认或放弃现有修改");
+        var proposal = existing.orElseGet(() -> {
+            var value = new ContinuousAudioScriptRevision(UUID.randomUUID().toString(), queueId, userId, kind,
+                    number, baseline.script(), after, baselineJson, scriptsJson,
+                    json.writeValueAsString(current.stream().map(ContinuousAudioSegment::getScript).toList()),
+                    instruction == null ? "" : instruction, requestKey);
+            if (unchanged) value.decide("UNCHANGED");
+            return scriptRevisions.saveAndFlush(value);
+        });
+        queue.scriptReviewChanged();
+        var result = new LinkedHashMap<>(snapshot(queue));
+        result.put("script_revision", revisionView(proposal));
+        return result;
+    }
+
+    public Optional<Map<String, Object>> existingScriptRevision(long userId, String queueId, String requestKey) {
+        if (requestKey == null || requestKey.isBlank() || scriptRevisions == null) return Optional.empty();
+        if (requestKey.length() > 100) throw new ApiException(HttpStatus.BAD_REQUEST, "修改请求编号过长");
+        var queue = required(userId, queueId);
+        return scriptRevisions.findByUserIdAndRequestKey(userId, requestKey).map(value -> {
+            if (!queueId.equals(value.getQueueId())) throw conflict("同一请求编号不能修改不同讲稿");
+            var result = new LinkedHashMap<>(snapshot(queue));
+            result.put("script_revision", revisionView(value));
+            return result;
+        });
+    }
+
+    /** Rolling back an accepted change is itself a reviewable proposal, based on the current text. */
+    public Map<String, Object> revertScriptRevision(long userId, String queueId, String revisionId, boolean confirmed) {
+        if (!confirmed) throw new ApiException(HttpStatus.BAD_REQUEST, "请明确确认要提出回退修改");
+        var queue = required(userId, queueId);
+        if (scriptRevisions == null) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿审阅存储尚未就绪");
+        var accepted = scriptRevisions.findByIdAndQueueIdAndUserId(revisionId, queueId, userId)
+                .orElseThrow(ContinuousAudioStore::notFound);
+        if (!"ACCEPTED".equals(accepted.getStatus())) throw conflict("只有已确认的修改可以提出回退");
+        reconcile(queue);
+        requireEditable(queue);
+        Integer number = accepted.getSegmentNumber();
+        var current = number == null ? segments.findByQueueIdOrderBySegmentNumberAsc(queueId)
+                : segments.findByQueueIdAndSegmentNumber(queueId, number).map(List::of).orElse(List.of());
+        var baseline = revision(queueId, number, current);
+        if (!baseline.script().equals(accepted.getAfterText()))
+            throw conflict("讲稿在这次修改之后又发生了变化，请查看当前正文后提出回退范围");
+        List<String> original = json.readValue(accepted.getBeforeScriptsJson(), new TypeReference<List<String>>() { });
+        // 同一基线的未处理回退由提案内容去重；已放弃的回退不能永久封住用户再次撤回。
+        return proposeScriptRevision(userId, queueId, "UNDO", number, original, "回退已确认的修改", baseline,
+                () -> { });
+    }
+
+    public List<Map<String, Object>> scriptRevisions(long userId, String queueId) {
+        required(userId, queueId);
+        return revisionViews(queueId);
+    }
+
+    /** Read one immutable proposal for voice preflight, including proposals outside the recent list. */
+    public Map<String, Object> scriptRevisionForReview(long userId, String queueId, String revisionId) {
+        required(userId, queueId);
+        if (scriptRevisions == null) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿审阅存储尚未就绪");
+        return revisionView(scriptRevisions.findByIdAndQueueIdAndUserId(revisionId, queueId, userId)
+                .orElseThrow(ContinuousAudioStore::notFound));
+    }
+
+    /** Queue lock serializes acceptance with synthesis, other accepts and all script mutations. */
+    public RevisionDecision decideScriptRevision(long userId, String queueId, String revisionId,
+            boolean confirmed, boolean accept) {
+        return decideScriptRevision(userId, queueId, revisionId, confirmed, accept, null);
+    }
+
+    public RevisionDecision decideScriptRevision(long userId, String queueId, String revisionId,
+            boolean confirmed, boolean accept, String voiceOverride) {
+        if (!confirmed) throw new ApiException(HttpStatus.BAD_REQUEST, "请先审阅讲稿差异并明确确认");
+        var queue = required(userId, queueId);
+        if (scriptRevisions == null) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿审阅存储尚未就绪");
+        var proposal = scriptRevisions.findByIdAndQueueIdAndUserId(revisionId, queueId, userId)
+                .orElseThrow(ContinuousAudioStore::notFound);
+        if ((accept && "ACCEPTED".equals(proposal.getStatus()))
+                || (!accept && "REJECTED".equals(proposal.getStatus())))
+            return decision(queue, proposal, false, 1, List.of());
+        if (!"PENDING".equals(proposal.getStatus()))
+            throw conflict("这份修改已经处理，请查看当前讲稿后重新提出修改");
+        if (!accept) {
+            proposal.decide("REJECTED");
+            queue.scriptReviewChanged();
+            return decision(queue, proposal, false, 1, List.of());
+        }
+        reconcile(queue);
+        requireEditable(queue);
+        Integer number = proposal.getSegmentNumber();
+        var current = number == null ? segments.findByQueueIdOrderBySegmentNumberAsc(queueId)
+                : segments.findByQueueIdAndSegmentNumber(queueId, number).map(List::of).orElse(List.of());
+        var baseline = json.readValue(proposal.getBaselineJson(), ScriptRevision.class);
+        if (!revision(queueId, number, current).segments().equals(baseline.segments())) {
+            // Return normally so STALE commits; the service reports the conflict afterwards.
+            proposal.decide("STALE");
+            queue.scriptReviewChanged();
+            return decision(queue, proposal, false, 1, List.of());
+        }
+        List<String> scripts = json.readValue(proposal.getScriptsJson(), new TypeReference<List<String>>() { });
+        Map<String, Object> outcome;
+        int first = number == null ? 1 : number;
+        if ("EXTEND".equals(proposal.getKind())) {
+            outcome = appendScripts(userId, queueId, scripts, baseline, () -> { });
+            first = ((Number) outcome.get("start")).intValue();
+        } else if (number != null) {
+            outcome = reviseScript(userId, queueId, number, scripts.get(0), proposal.getInstruction(), baseline, () -> { });
+        } else {
+            outcome = replaceScripts(userId, queueId, scripts, baseline, () -> { });
+        }
+        // 接受后以实际正文更新语言；原文已被编辑，后续请求不能再将它当成逐字原文。
+        var command = command(queue);
+        var context = new LinkedHashMap<>(command.context());
+        String fullScript = segments.findByQueueIdOrderBySegmentNumberAsc(queueId).stream()
+                .map(ContinuousAudioSegment::getScript).collect(java.util.stream.Collectors.joining("\n\n"));
+        context.put("language", com.bedouyu.audiorag.tools.audio.SpeechService.detectLanguage(fullScript));
+        context.put("exact_source", false);
+        context.put("script_modified", true);
+        queue.updateScriptCommand(json.writeValueAsString(new QueueCommand(command.topic(), command.projectId(),
+                command.courseMinutes(), command.segmentMinutes(), command.audience(),
+                voiceOverride == null ? command.voice() : voiceOverride,
+                command.prefetchSize(), command.requestId(), command.mode(), command.instruction(), command.sourceText(),
+                command.sourceTitle(), context)));
+        proposal.decide("ACCEPTED");
+        List<String> retired = outcome.get("retired") instanceof List<?> values
+                ? values.stream().map(String::valueOf).toList() : List.of();
+        return decision(queue, proposal, true, first, retired);
+    }
+
+    private RevisionDecision decision(ContinuousAudioQueue queue, ContinuousAudioScriptRevision proposal,
+            boolean applied, int first, List<String> retired) {
+        scriptRevisions.flush();
+        var result = new LinkedHashMap<>(snapshot(queue));
+        result.put("script_revision", revisionView(proposal));
+        return new RevisionDecision(result, applied, first, retired, "STALE".equals(proposal.getStatus()));
+    }
+
+    private List<Map<String, Object>> revisionViews(String queueId) {
+        if (scriptRevisions == null) return List.of();
+        var pending = scriptRevisions.findTop20ByQueueIdAndStatusOrderByCreatedAtDesc(queueId, "PENDING");
+        var values = new ArrayList<>(pending);
+        scriptRevisions.findTop30ByQueueIdOrderByCreatedAtDesc(queueId).stream()
+                .filter(value -> !"PENDING".equals(value.getStatus())).limit(30 - values.size()).forEach(values::add);
+        return values.stream().sorted(Comparator.comparing(ContinuousAudioScriptRevision::getCreatedAt).reversed())
+                .map(this::revisionView).toList();
+    }
+
+    private Map<String, Object> revisionView(ContinuousAudioScriptRevision value) {
+        var result = new LinkedHashMap<String, Object>();
+        result.put("id", value.getId()); result.put("queue_id", value.getQueueId());
+        result.put("kind", value.getKind()); result.put("status", value.getStatus());
+        result.put("created_at", value.getCreatedAt().toString());
+        result.put("decided_at", value.getDecidedAt() == null ? null : value.getDecidedAt().toString());
+        result.put("before_text", value.getBeforeText()); result.put("after_text", value.getAfterText());
+        result.put("segment_number", value.getSegmentNumber()); result.put("instruction", value.getInstruction());
+        return result;
+    }
+
+    public record RevisionDecision(Map<String, Object> snapshot, boolean applied, int firstSegment,
+            List<String> retired, boolean stale) { }
+
     /** 在现有分段之后追加新内容：编号接着排，原有段落与音频不动。 */
     @Transactional
     public Map<String, Object> appendScripts(long userId, String queueId, List<String> scripts) {
+        return appendScripts(userId, queueId, scripts, null, () -> { });
+    }
+
+    public Map<String, Object> appendScripts(long userId, String queueId, List<String> scripts,
+            ScriptRevision expected, Runnable mutationGuard) {
         var queue = required(userId, queueId);
         reconcile(queue);
-        if ("GENERATING".equals(queue.getStatus()))
-            throw conflict("正在合成音频，等这一段完成后再追加");
+        requireEditable(queue);
         if (scripts == null || scripts.isEmpty() || scripts.size() > 200
                 || scripts.stream().anyMatch(script -> script == null || script.isBlank()))
             throw new IllegalArgumentException("追加的讲稿内容无效");
         List<ContinuousAudioSegment> existing = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
+        if (existing.size() + scripts.size() > 200)
+            throw new ApiException(HttpStatus.BAD_REQUEST, "讲稿分段总数不能超过 200 段");
+        requireRevision(queueId, null, expected, existing);
+        if (existing.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus())))
+            throw conflict("有片段正在合成，请等它结束后再追加");
+        mutationGuard.run();
         int next = existing.stream().mapToInt(ContinuousAudioSegment::getSegmentNumber).max().orElse(0) + 1;
         int start = next;
         for (String raw : scripts) {
-            String script = raw.strip();
+            String script = raw;
             segments.save(new ContinuousAudioSegment(queueId, next++, script, Hashing.sha256(script),
                     UUID.randomUUID().toString()));
         }
@@ -310,24 +554,37 @@ public class ContinuousAudioStore {
      */
     @Transactional
     public Map<String, Object> replaceScripts(long userId, String queueId, List<String> scripts) {
+        return replaceScripts(userId, queueId, scripts, null, () -> { });
+    }
+
+    public Map<String, Object> replaceScripts(long userId, String queueId, List<String> scripts,
+            ScriptRevision expected, Runnable mutationGuard) {
         var queue = required(userId, queueId);
         reconcile(queue);
-        if ("GENERATING".equals(queue.getStatus()))
-            throw conflict("正在合成音频，等这一段完成后再整篇重写");
+        requireEditable(queue);
         if (scripts == null || scripts.isEmpty() || scripts.size() > 200
                 || scripts.stream().anyMatch(script -> script == null || script.isBlank()))
             throw new IllegalArgumentException("整篇讲稿内容无效");
         List<ContinuousAudioSegment> existing = segments.findByQueueIdOrderBySegmentNumberAsc(queueId);
+        requireRevision(queueId, null, expected, existing);
+        if (existing.stream().anyMatch(s -> "SYNTHESIZING".equals(s.getStatus())))
+            throw conflict("有片段正在合成，请等它结束后再整篇重写");
+        mutationGuard.run();
         List<String> retired = new ArrayList<>();
         for (int index = 0; index < scripts.size(); index++) {
-            String script = scripts.get(index).strip();
+            String script = scripts.get(index);
             String hash = Hashing.sha256(script);
             if (index < existing.size()) {
                 ContinuousAudioSegment segment = existing.get(index);
                 if (script.equals(segment.getScript())) continue;
+                String nextAudioId = UUID.randomUUID().toString();
+                audit(segment, Map.of("action", "REVISE_SCRIPT", "user_id", userId,
+                        "previous_script", segment.getScript(), "previous_hash", segment.getScriptHash(),
+                        "new_hash", hash, "previous_audio_id", segment.getAudioId(), "new_audio_id", nextAudioId,
+                        "note", "整篇讲稿修改", "time", Instant.now().toString()));
                 retired.add(segment.getAudioId());
                 if (segment.getRecordId() != null) records.deleteProjectRecord(segment.getRecordId());
-                segment.revise(script, hash, UUID.randomUUID().toString());
+                segment.revise(script, hash, nextAudioId);
             } else {
                 segments.save(new ContinuousAudioSegment(queueId, index + 1, script, hash,
                         UUID.randomUUID().toString()));
@@ -364,7 +621,7 @@ public class ContinuousAudioStore {
         if (current == null) return Optional.empty();
         if (current.getUserId() != userId || !projects.existsByIdAndUserId(current.getProjectId(), userId)) throw notFound();
         // 轮询是纯读：租约仍在有效期内时没有需要纠正的状态，不取行锁，避免与生成任务争同一条队列行。
-        if (current.getLeaseUntil() != null && current.getLeaseUntil().isAfter(Instant.now())) {
+        if (current.getLeaseUntil() == null || current.getLeaseUntil().isAfter(Instant.now())) {
             return Optional.of(snapshot(current));
         }
         var locked = queues.findLockedById(queueId).orElseThrow(ContinuousAudioStore::notFound);
@@ -377,6 +634,13 @@ public class ContinuousAudioStore {
     public void requireOwned(long userId, String queueId) {
         var queue = queues.findById(queueId).orElseThrow(ContinuousAudioStore::notFound);
         if (queue.getUserId() != userId || !projects.existsByIdAndUserId(queue.getProjectId(), userId)) throw notFound();
+    }
+
+    @Transactional(readOnly = true)
+    public void requireOwnedInProject(long userId, long projectId, String queueId) {
+        var queue = queues.findById(queueId).orElseThrow(ContinuousAudioStore::notFound);
+        if (queue.getUserId() != userId || queue.getProjectId() != projectId
+                || !projects.existsByIdAndUserId(projectId, userId)) throw notFound();
     }
 
     /**
@@ -503,6 +767,33 @@ public class ContinuousAudioStore {
     private ContinuousAudioSegment segment(ContinuousAudioQueue queue, int number) {
         return segments.findByQueueIdAndSegmentNumber(queue.getId(), number).orElseThrow(ContinuousAudioStore::notFound);
     }
+
+    private void requireEditable(ContinuousAudioQueue queue) {
+        if ("GENERATING".equals(queue.getStatus()) || "PREPARING".equals(queue.getStatus()))
+            throw conflict("正在生成内容，请等这批片段完成后再改讲稿");
+        if ("CANCELLED".equals(queue.getStatus())) throw conflict("已取消的任务不能改讲稿");
+    }
+
+    private ScriptRevision revision(String queueId, Integer number, List<ContinuousAudioSegment> values) {
+        return new ScriptRevision(queueId, number, values.stream().map(ContinuousAudioSegment::getScript)
+                .collect(java.util.stream.Collectors.joining("\n\n")), values.stream()
+                .map(s -> new SegmentRevision(s.getId(), s.getSegmentNumber(), s.getVersion(),
+                        s.getScriptHash(), s.getAudioId())).toList());
+    }
+
+    private void requireRevision(String queueId, Integer number, ScriptRevision expected,
+            List<ContinuousAudioSegment> current) {
+        if (expected != null && (!queueId.equals(expected.queueId())
+                || !Objects.equals(number, expected.segmentNumber())
+                || !revision(queueId, number, current).segments().equals(expected.segments())))
+            throw conflict("讲稿或音频版本已改变，本次修改没有保存；请查看最新讲稿后重新提出修改");
+    }
+
+    public record SegmentRevision(Long id, int number, long version, String scriptHash, String audioId) { }
+    public record ScriptRevision(String queueId, Integer segmentNumber, String script, List<SegmentRevision> segments) {
+        public ScriptRevision { segments = List.copyOf(segments); }
+    }
+
     private void requireClaim(ContinuousAudioQueue queue, String status, String token) {
         if (token == null || !status.equals(queue.getStatus()) || !token.equals(queue.getLeaseToken()))
             throw conflict("队列领取已失效，不能继续执行外部副作用");
@@ -555,6 +846,7 @@ public class ContinuousAudioStore {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("queue_id", queue.getId()); result.put("status", queue.getStatus()); result.put("version", queue.getVersion());
         result.put("lessons", lessons); result.put("segments", states); result.put("errors", errors);
+        result.put("script_revisions", revisionViews(queue.getId()));
         result.put("generating", "GENERATING".equals(queue.getStatus()) ? command.prefetchSize() : 0);
         result.put("total_segments", values.size()); result.put("storage", "mysql-durable");
         result.put("prefetch_size", command.prefetchSize());

@@ -45,6 +45,7 @@ public class AgentRequestCoordinator {
         Map<String, Object> input = new TreeMap<>();
         input.put("message", command.message()); input.put("requested_session_id", command.sessionId());
         input.put("memory_strategy", command.memoryStrategy());
+        input.put("audio_queue_id", command.audioQueueId());
         // null允许开放式推断，显式[]代表用户声明；二者不能共用幂等结果。
         input.put("required_artifacts_supplied", command.requiredArtifacts() != null);
         input.put("required_artifacts", command.requiredArtifacts() == null ? List.of() : command.requiredArtifacts().stream().sorted().toList());

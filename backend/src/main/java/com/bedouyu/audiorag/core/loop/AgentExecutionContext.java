@@ -29,6 +29,11 @@ public class AgentExecutionContext {
     public Map<String, Object> memoryData = Map.of();
     /** 服务端确定性解析出的请求约束（语言、时长、篇幅），仅主控设置；child()不继承。 */
     public volatile String intentHint = "";
+    /** 用户当前选中的音频；工具始终读取 rootContext() 并重新校验归属。 */
+    public volatile String audioQueueId;
+    /** 直接音频请求须通过复核后才可交付；聊天允许返回明确不通过的复核草稿。 */
+    public boolean audioRequest;
+    private AgentExecutionContext rootContext = this;
     public AgentExecutionContext(String runId, String sessionId, String agentId, long userId, long projectId,
             AgentBudget budget, EvidenceLedger evidence, Set<String> readableArtifacts,
             Delegate delegate, Consumer<Map<String, Object>> events) {
@@ -48,9 +53,14 @@ public class AgentExecutionContext {
     }
     public AgentExecutionContext child(String agent, Set<String> artifacts) {
         assertActive();
-        return new AgentExecutionContext(runId, sessionId, agent, userId, projectId,
+        var child = new AgentExecutionContext(runId, sessionId, agent, userId, projectId,
                 budget, evidence, artifacts, null, events, invocationId, scope());
+        child.rootContext = rootContext();
+        child.audioQueueId = rootContext().audioQueueId;
+        child.audioRequest = audioRequest;
+        return child;
     }
+    public AgentExecutionContext rootContext() { return rootContext; }
     public void assertActive() {
         ToolScope scope = scope();
         if (scope != null) scope.assertActive();

@@ -49,3 +49,8 @@ export function readPlayback(value) {
     instruction: typeof value.instruction === "string" ? value.instruction.slice(0, 4000) : "",
   };
 }
+
+/** 对话只绑定右侧当前空间正在展示的队列，其他空间的后台播放不作为改稿目标。 */
+export function chatAudioQueueId(playback, projectId) {
+  return projectId != null && playback?.project?.id === projectId ? playback.queue?.queue_id || undefined : undefined;
+}

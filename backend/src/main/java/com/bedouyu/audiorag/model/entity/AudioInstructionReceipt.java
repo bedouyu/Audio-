@@ -15,13 +15,18 @@ public class AudioInstructionReceipt {
     @Column(name = "request_id", nullable = false, length = 36) private String requestId;
     @Column(nullable = false, length = 64) private String fingerprint;
     @Column(name = "queue_id", nullable = false, length = 36) private String queueId;
+    @Column(name = "request_action", length = 24) private String action;
     @Column(name = "created_at", nullable = false) private Instant createdAt;
     protected AudioInstructionReceipt() { }
     public AudioInstructionReceipt(long userId, long projectId, String requestId, String fingerprint, String queueId) {
+        this(userId, projectId, requestId, fingerprint, queueId, "GENERATE");
+    }
+    public AudioInstructionReceipt(long userId, long projectId, String requestId, String fingerprint, String queueId, String action) {
         this.userId = userId; this.projectId = projectId; this.requestId = requestId;
-        this.fingerprint = fingerprint; this.queueId = queueId; createdAt = Instant.now();
+        this.fingerprint = fingerprint; this.queueId = queueId; this.action = action; createdAt = Instant.now();
     }
     public long getProjectId() { return projectId; }
     public String getFingerprint() { return fingerprint; }
     public String getQueueId() { return queueId; }
+    public String getAction() { return action == null ? "GENERATE" : action; }
 }

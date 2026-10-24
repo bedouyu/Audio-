@@ -28,10 +28,10 @@ public class AudioSegmentsTool implements FunctionTool {
 
     public FunctionDefinition definition() {
         return new FunctionDefinition("audio_segments",
-                "读取当前项目最近一条音频的分段情况：每段编号、合成状态、字数与开头摘录。"
-                        + "要改某一段讲稿前必须先调用它确认段号和内容；不传 queue_id 时取该项目最新一条音频。",
+                "读取当前选中音频的分段情况：每段编号、合成状态、字数与开头摘录。"
+                        + "要改某一段讲稿前必须先调用它确认段号和内容；未选中音频时才取本项目最新一条。",
                 ToolSchemas.object(Map.of("queue_id", ToolSchemas.string(36),
-                        "full", ToolSchemas.bool("是否返回完整正文；默认只给开头 1200 字")), "queue_id"));
+                        "full", ToolSchemas.bool("是否返回完整正文；默认只给开头 1200 字"))));
     }
 
     public Object execute(JsonNode args, AgentExecutionContext context) {

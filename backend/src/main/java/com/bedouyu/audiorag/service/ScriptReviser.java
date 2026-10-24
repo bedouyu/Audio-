@@ -21,8 +21,8 @@ public class ScriptReviser {
             "你是音频讲稿的编辑。用户会给你一段现有讲稿和一条修改要求。",
             "规则：",
             "1. 只按修改要求改动相关内容，未提及的部分保持原样，不要顺手润色全文。",
-            "2. 保持原有语言（中文仍是中文、英文仍是英文），不要翻译、不要加标题或说明。",
-            "3. 保持口语讲述风格，不要添加 Markdown、编号列表或旁白。",
+            "2. 按本次目标语言编辑；用户明确要求翻译或更换语言时执行，未要求时沿用原有语言。",
+            "3. 按用户指定的体裁和风格编辑，可以改成散文、小说等正文；未指定时沿用原风格。不要擅加 Markdown、编号列表或旁白。",
             "4. 直接输出修改后的讲稿全文，不要任何前后缀、解释或引号包裹。",
             "5. 如果修改要求与该段内容无关，就原样返回这段讲稿。");
 
@@ -30,8 +30,8 @@ public class ScriptReviser {
             "你是音频讲稿的编辑。用户会给你一整篇现有讲稿和一条修改要求。",
             "规则：",
             "1. 按修改要求重排整篇：可以删掉不要的部分（比如开场白、串场、结尾总结），也可以调整每句的组织顺序。",
-            "2. 只改被要求改的部分，没提到的内容保持原意和原语言，不要翻译、不要新增解释。",
-            "3. 保持口语讲述风格，不要添加 Markdown、编号列表、括号旁白或任何前后缀说明。",
+            "2. 按用户要求的目标语言、体裁和结构重写；要求全篇中文散文时直接交付中文散文，不保留英语跟读、译文或教学框架。没要求变更的内容保持原意。",
+            "3. 文体由用户要求决定，不强制口语讲述。不要添加 Markdown、编号列表、括号旁白或任何前后缀说明。",
             "4. 输出重写后的整篇讲稿正文；段落之间用空行分隔，方便之后再分段。",
             "5. 严格按修改要求执行，不要因为“看起来更完整”而自行加回被要求删除的内容。");
 
@@ -39,7 +39,7 @@ public class ScriptReviser {
             "你是音频讲稿的续写编辑。用户会给你现有讲稿的结尾片段和一条续写要求。",
             "规则：",
             "1. 只输出新增的部分，不要重复或改写已有内容，不要加“接下来”“继续”之类的过渡语。",
-            "2. 严格沿用样例的格式、语言、节奏和难度；样例是英文-中文交替就照此交替。",
+            "2. 用户没有另行要求时沿用样例的格式、语言、节奏和难度；用户明确指定新的语言、体裁或格式时，新增部分按新要求执行。",
             "3. 不要序号、标题、解释或前后缀，直接给可朗读的正文。",
             "4. 段落之间用空行分隔，方便之后分段。");
 
@@ -54,7 +54,8 @@ public class ScriptReviser {
         var messages = List.of(
                 Map.<String, Object>of("role", "system", "content", SYSTEM),
                 Map.<String, Object>of("role", "user", "content",
-                        "当前讲稿：\n<<<\n" + script + "\n>>>\n\n修改要求：" + instruction));
+                        "当前讲稿：\n<<<\n" + script + "\n>>>\n\n修改要求：" + instruction
+                                + "\n\n" + ScriptEditPolicy.promptHint(script, instruction)));
         try {
             var reply = model.decide(messages, List.of(), token -> { }, 180_000L);
             String text = clean(reply == null ? null : reply.content());
@@ -70,8 +71,8 @@ public class ScriptReviser {
     }
 
     /**
-     * 整篇重写：用户要改的是格式/结构（去掉开场白、按"英语-汉语-英语"循环等），
-     * 不是局部措辞，所以给它整篇原文并允许它重排内容。分段由调用方负责。
+     * 整篇重写：给模型完整原稿，按用户要求变更语言、体裁、格式或结构。
+     * 分段和待确认修改的保存由调用方负责。
      */
     public String rewriteWhole(String script, String instruction) {
         if (!model.configured())
@@ -79,7 +80,8 @@ public class ScriptReviser {
         var messages = List.of(
                 Map.<String, Object>of("role", "system", "content", WHOLE_SYSTEM),
                 Map.<String, Object>of("role", "user", "content",
-                        "当前整篇讲稿：\n<<<\n" + script + "\n>>>\n\n整篇修改要求：" + instruction));
+                        "当前整篇讲稿：\n<<<\n" + script + "\n>>>\n\n整篇修改要求：" + instruction
+                                + "\n\n" + ScriptEditPolicy.promptHint(script, instruction)));
         try {
             var reply = model.decide(messages, List.of(), token -> { }, 240_000L);
             String text = clean(reply == null ? null : reply.content());
@@ -104,7 +106,8 @@ public class ScriptReviser {
         var messages = List.of(
                 Map.<String, Object>of("role", "system", "content", EXTEND_SYSTEM),
                 Map.<String, Object>of("role", "user", "content",
-                        "现有讲稿的结尾片段：\n<<<\n" + tail + "\n>>>\n\n续写要求：" + instruction));
+                        "现有讲稿的结尾片段：\n<<<\n" + tail + "\n>>>\n\n续写要求：" + instruction
+                                + "\n\n" + ScriptEditPolicy.promptHint(tail, instruction)));
         try {
             var reply = model.decide(messages, List.of(), token -> { }, 240_000L);
             String text = clean(reply == null ? null : reply.content());

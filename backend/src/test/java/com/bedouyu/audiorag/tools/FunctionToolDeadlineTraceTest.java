@@ -187,6 +187,29 @@ class FunctionToolDeadlineTraceTest {
         } finally { release.countDown(); }
     }
 
+    @Test void executorUsesTheModelBackedToolsWaitAllowance() {
+        FunctionTool edit = new FunctionTool() {
+            public FunctionDefinition definition() { return new FunctionDefinition("edit", "编辑", ToolSchemas.object(Map.of())); }
+            public boolean hasSideEffects() { return true; }
+            public long minimumTimeoutMillis() { return 2000; }
+            public Object execute(JsonNode args, AgentExecutionContext context) {
+                try { Thread.sleep(100); }
+                catch (InterruptedException failure) { throw new IllegalStateException(failure); }
+                context.assertActive();
+                return Map.of("status", "saved");
+            }
+        };
+        try (var runtime = new ToolExecutionRuntime(1, 1, 20, 20)) {
+            var result = executor(runtime, edit).execute(new FunctionCall("edit-call", "edit", "{}"), profile("edit"), context());
+            assertThat(json.readTree(result).path("status").asText()).isEqualTo("saved");
+            assertThat(events.stream().filter(event -> "tool_heartbeat".equals(event.get("kind"))).toList())
+                    .isNotEmpty().allSatisfy(event -> {
+                        assertThat(event.get("tool")).isEqualTo("edit");
+                        assertThat(event.get("call_id")).isEqualTo(events.get(0).get("call_id"));
+                    });
+        }
+    }
+
     private FunctionToolExecutor executor(ToolExecutionRuntime runtime, FunctionTool... tools) {
         var repository = mock(AudioRagRepository.class); when(repository.ownsProject(1, 7)).thenReturn(true);
         return new FunctionToolExecutor(new FunctionToolRegistry(List.of(), List.of(tools)),

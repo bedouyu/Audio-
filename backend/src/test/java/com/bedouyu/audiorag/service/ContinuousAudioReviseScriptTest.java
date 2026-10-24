@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import tools.jackson.databind.ObjectMapper;
 
 /** 在当前讲稿基础上改一段：只换这一段，旧稿与旧音频进审计与延迟清理。 */
@@ -127,6 +128,16 @@ class ContinuousAudioReviseScriptTest {
         assertThat(String.join("", parts)).isEqualTo(text);
         assertThat(parts).allSatisfy(part -> assertThat(part).endsWith("。"));
     }
+
+    @Test void splitIntoPreservesEnglishParagraphSeparatorsInsideAPage() {
+        String text = "First paragraph has no punctuation\n\nSecond paragraph continues the sentence"
+                + "\n\nThird paragraph also has words\n\nFourth paragraph finishes the example";
+
+        List<String> parts = ContinuousAudioService.splitInto(text, 2);
+
+        assertThat(parts).hasSize(2);
+        assertThat(String.join("\n\n", parts)).isEqualTo(text);
+    }
     @Test void appendScriptsKeepsExistingSegmentsAndNumbersNewOnes() {
         Fixture fixture = fixture();
         fixture.segment().ready("/media/a.wav", 41L);
@@ -140,6 +151,128 @@ class ContinuousAudioReviseScriptTest {
         assertThat(outcome.get("start")).isEqualTo(2);
         verify(segments, times(2)).save(any(ContinuousAudioSegment.class));
     }
+
+    @Test void staleSegmentRevisionCannotOverwriteANewerEditOrRetireItsAudio() {
+        Fixture fixture = fixture();
+        var baseline = store.scriptRevision(1, fixture.queue().getId(), 1);
+        store.reviseScript(1, fixture.queue().getId(), 1, "另一处先保存的新讲稿。", "先保存");
+        String winnerAudioId = fixture.segment().getAudioId();
+        String winnerAudit = fixture.segment().getAuditJson();
+
+        assertThatThrownBy(() -> store.reviseScript(1, fixture.queue().getId(), 1,
+                "耗时模型根据旧稿返回的内容。", "迟到", baseline, () -> { }))
+                .isInstanceOfSatisfying(ApiException.class, failure ->
+                        assertThat(failure.status()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(fixture.segment().getScript()).isEqualTo("另一处先保存的新讲稿。");
+        assertThat(fixture.segment().getAudioId()).isEqualTo(winnerAudioId);
+        assertThat(fixture.segment().getAuditJson()).isEqualTo(winnerAudit);
+        verifyNoInteractions(records);
+    }
+
+    @Test void wholeRewriteRejectsAnAppendThatHappenedDuringModelGeneration() {
+        Fixture fixture = fixture();
+        var baseline = store.fullScriptRevision(1, fixture.queue().getId());
+        var added = new ContinuousAudioSegment(fixture.queue().getId(), 2, "新增讲稿。",
+                Hashing.sha256("新增讲稿。"), UUID.randomUUID().toString());
+        when(segments.findByQueueIdOrderBySegmentNumberAsc(fixture.queue().getId()))
+                .thenReturn(List.of(fixture.segment(), added));
+        String oldAudio = fixture.segment().getAudioId();
+
+        assertThatThrownBy(() -> store.replaceScripts(1, fixture.queue().getId(), List.of("迟到的整篇重写。"),
+                baseline, () -> { })).isInstanceOf(ApiException.class).hasMessageContaining("版本已改变");
+
+        assertThat(fixture.segment().getAudioId()).isEqualTo(oldAudio);
+        assertThat(fixture.segment().getScript()).isEqualTo("A short script.");
+        verify(segments, never()).delete(any());
+        verify(segments, never()).save(any());
+        verifyNoInteractions(records);
+    }
+
+    @Test void appendRejectsARevisionThatHappenedDuringModelGeneration() {
+        Fixture fixture = fixture();
+        var baseline = store.fullScriptRevision(1, fixture.queue().getId());
+        store.reviseScript(1, fixture.queue().getId(), 1, "另一处先改了结尾。", "先保存");
+
+        assertThatThrownBy(() -> store.appendScripts(1, fixture.queue().getId(), List.of("根据旧结尾续写。"),
+                baseline, () -> { })).isInstanceOf(ApiException.class).hasMessageContaining("版本已改变");
+
+        verify(segments, never()).save(any());
+        assertThat(fixture.segment().getScript()).isEqualTo("另一处先改了结尾。");
+    }
+
+    @Test void cancelledAndPreparingQueuesCannotBeReactivatedByWholeEdits() {
+        Fixture fixture = fixture();
+        fixture.queue().release("CANCELLED");
+        assertThatThrownBy(() -> store.appendScripts(1, fixture.queue().getId(), List.of("新增内容。")))
+                .isInstanceOf(ApiException.class).hasMessageContaining("已取消");
+        assertThatThrownBy(() -> store.replaceScripts(1, fixture.queue().getId(), List.of("重写内容。")))
+                .isInstanceOf(ApiException.class).hasMessageContaining("已取消");
+        assertThat(fixture.queue().getStatus()).isEqualTo("CANCELLED");
+        fixture.queue().release("PREPARING");
+        assertThatThrownBy(() -> store.appendScripts(1, fixture.queue().getId(), List.of("新增内容。")))
+                .isInstanceOf(ApiException.class).hasMessageContaining("正在生成");
+        assertThatThrownBy(() -> store.replaceScripts(1, fixture.queue().getId(), List.of("重写内容。")))
+                .isInstanceOf(ApiException.class).hasMessageContaining("正在生成");
+        assertThat(fixture.queue().getStatus()).isEqualTo("PREPARING");
+        verify(segments, never()).save(any());
+        verifyNoInteractions(records);
+    }
+
+    @Test void cancelledMutationGuardRunsBeforeChangingAnyScriptOrAudio() {
+        Fixture fixture = fixture();
+        var baseline = store.fullScriptRevision(1, fixture.queue().getId());
+        String originalAudio = fixture.segment().getAudioId();
+        Runnable stopped = () -> { throw new IllegalStateException("已停止"); };
+
+        assertThatThrownBy(() -> store.replaceScripts(1, fixture.queue().getId(), List.of("不能保存的重写。"),
+                baseline, stopped)).hasMessage("已停止");
+        assertThatThrownBy(() -> store.appendScripts(1, fixture.queue().getId(), List.of("不能保存的续写。"),
+                baseline, stopped)).hasMessage("已停止");
+        var single = store.scriptRevision(1, fixture.queue().getId(), 1);
+        assertThatThrownBy(() -> store.reviseScript(1, fixture.queue().getId(), 1, "不能保存的单段。", "改", single, stopped))
+                .hasMessage("已停止");
+
+        assertThat(fixture.segment().getScript()).isEqualTo("A short script.");
+        assertThat(fixture.segment().getAudioId()).isEqualTo(originalAudio);
+        verify(segments, never()).save(any());
+        verifyNoInteractions(records);
+    }
+
+    @Test void scopedGenerationSkipsEarlierPendingSegments() {
+        Fixture fixture = fixture();
+        var later = new ContinuousAudioSegment(fixture.queue().getId(), 3, "目标讲稿。",
+                Hashing.sha256("目标讲稿。"), UUID.randomUUID().toString());
+        when(segments.findByQueueIdOrderBySegmentNumberAsc(fixture.queue().getId()))
+                .thenReturn(List.of(fixture.segment(), later));
+        fixture.queue().claim("run", Instant.now().plusSeconds(600));
+
+        var claimed = store.claimNext(1, fixture.queue().getId(), "run", 3).orElseThrow();
+
+        assertThat(claimed.segmentNumber()).isEqualTo(3);
+        assertThat(fixture.segment().getStatus()).isEqualTo("PENDING");
+        assertThat(later.getStatus()).isEqualTo("SYNTHESIZING");
+    }
+
+    @Test void pollingAQueueWithoutALeaseDoesNotAcquireAWriteLock() {
+        Fixture fixture = fixture();
+        clearInvocations(queues);
+
+        store.status(1, fixture.queue().getId());
+
+        verify(queues, never()).findLockedById(anyString());
+    }
+
+    @Test void projectScopedOwnershipRejectsAnotherProjectEvenForTheSameUser() {
+        Fixture fixture = fixture();
+        store.requireOwnedInProject(1, 7, fixture.queue().getId());
+
+        assertThatThrownBy(() -> store.requireOwnedInProject(1, 8, fixture.queue().getId()))
+                .isInstanceOfSatisfying(ApiException.class, failure ->
+                        assertThat(failure.status()).isEqualTo(HttpStatus.NOT_FOUND));
+        verify(queues, never()).findLockedById(anyString());
+    }
+
     private Fixture fixture() {
         String id = UUID.randomUUID().toString();
         var command = new QueueCommand("Topic", 7, 3, 1, "", "", 1, UUID.randomUUID().toString());

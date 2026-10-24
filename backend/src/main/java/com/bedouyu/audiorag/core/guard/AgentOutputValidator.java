@@ -58,11 +58,14 @@ public class AgentOutputValidator {
             for (String required : context.taskSpecification.requiredArtifacts())
                 if (outputs.stream().noneMatch(item -> required.equals(item.get("kind"))))
                     throw new IllegalArgumentException("最低任务规格未完成，缺少真实产物：" + required + "；不能只用文字声称完成");
-            // 复核是唯一能发现篇幅与事实问题的环节；产出讲稿却没有复核报告，不算完成。
-            boolean scripted = outputs.stream().anyMatch(item -> "SCRIPT_DRAFT".equals(item.get("kind")));
-            boolean reviewed = outputs.stream().anyMatch(item -> "REVIEW_REPORT".equals(item.get("kind")));
-            if (scripted && !reviewed)
-                throw new IllegalArgumentException("产出了讲稿就必须先复核：请委派 review_agent 阅读该讲稿并调用 validate_script，拿到复核报告后再交付");
+            for (var script : outputs) {
+                if (!"SCRIPT_DRAFT".equals(script.get("kind")) || "SUPERSEDED".equals(script.get("status"))) continue;
+                var review = context.audioRequest ? ScriptReviewPolicy.approvedReviewFor(outputs, script, json)
+                        : ScriptReviewPolicy.boundReviewFor(outputs, script, json);
+                if (review.isEmpty())
+                    throw new IllegalArgumentException("产出了讲稿就必须先复核当前版本" + (context.audioRequest ? "并通过" : "")
+                            + "：请委派 review_agent 阅读最终讲稿并调用 validate_script；旧稿的报告不能用于交付修订稿");
+            }
         }
     }
     public void validatePlan(String content) {

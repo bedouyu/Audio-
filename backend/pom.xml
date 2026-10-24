@@ -15,6 +15,7 @@
     <description>Audio智能助手 Java 17 Agent backend</description>
     <properties>
         <java.version>17</java.version>
+        <audiorag.build.directory>${project.basedir}/target</audiorag.build.directory>
     </properties>
     <dependencies>
         <dependency>
@@ -69,6 +70,7 @@
         </dependency>
     </dependencies>
     <build>
+        <directory>${audiorag.build.directory}</directory>
         <finalName>audiorag-backend</finalName>
         <plugins>
             <plugin>

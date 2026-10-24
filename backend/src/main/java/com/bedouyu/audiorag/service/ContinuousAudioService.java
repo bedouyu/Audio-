@@ -147,7 +147,7 @@ public class ContinuousAudioService {
                     return;
                 }
                 var token = store.claimGeneration(userId, creation.queueId());
-                if (token.isPresent()) runGeneration(userId, creation.queueId(), command.prefetchSize(), token.get());
+                if (token.isPresent()) runGeneration(userId, creation.queueId(), command.prefetchSize(), token.get(), null);
             });
         } catch (RejectedExecutionException error) {
             store.preparationFailed(userId, creation, "音频任务已满，请稍后使用新的请求重新提交");
@@ -200,11 +200,24 @@ public class ContinuousAudioService {
     }
 
     /**
-     * 在当前讲稿的基础上改某一段：可以给修改意见（模型改写），也可以直接给新文本（手工编辑）。
-     * 只重合成这一段，其余段不动。
+     * 基于当前讲稿提出某段修改：可以给修改意见或手工文本，用户确认前不应用。
      */
     public Map<String, Object> reviseSegment(long userId, String queueId, int number, String instruction, String text) {
-        String current = store.segmentScript(userId, queueId, number);
+        return reviseSegment(userId, queueId, number, instruction, text, () -> { });
+    }
+
+    public Map<String, Object> reviseSegment(long userId, String queueId, int number, String instruction, String text,
+            Runnable mutationGuard) {
+        return reviseSegment(userId, queueId, number, instruction, text, null, mutationGuard);
+    }
+
+    public Map<String, Object> reviseSegment(long userId, String queueId, int number, String instruction, String text,
+            String expectedScriptHash, Runnable mutationGuard) {
+        var baseline = store.scriptRevision(userId, queueId, number);
+        String current = baseline.script();
+        if (expectedScriptHash != null && !expectedScriptHash.isBlank()
+                && !com.bedouyu.audiorag.common.Hashing.sha256(current).equalsIgnoreCase(expectedScriptHash.strip()))
+            throw new ApiException(HttpStatus.CONFLICT, "这段讲稿已在别处更新，请核对最新正文后再保存；你的输入仍保留");
         boolean manual = text != null && !text.isBlank();
         String edited;
         if (manual) {
@@ -217,76 +230,147 @@ public class ContinuousAudioService {
         }
         if (edited.length() < 10 || edited.length() > 20000)
             throw new ApiException(HttpStatus.BAD_REQUEST, "改后的这段讲稿需为 10 到 20000 个字符");
-        String language = SpeechService.detectLanguage(current);
-        if (!language.equals(SpeechService.detectLanguage(edited)))
-            throw new ApiException(HttpStatus.BAD_REQUEST, "改后的语言和原文不一致，请保持同一种语言");
+        ScriptEditPolicy.validateLanguage(current, edited, instruction, manual);
         // 长度保护只针对模型改写：手工编辑是用户自己写的，长短由他决定。
-        if (!manual) {
+        if (!manual && !ScriptEditPolicy.allowsLengthChange(current, instruction)) {
             double ratio = (double) edited.length() / Math.max(1, current.length());
             if (ratio < 0.5 || ratio > 2.0)
                 throw new ApiException(HttpStatus.BAD_REQUEST, "改动幅度过大（" + current.length() + " 字 → "
                         + edited.length() + " 字），请缩小改动范围后重试");
         }
-        var outcome = store.reviseScript(userId, queueId, number, edited,
-                manual ? "手工编辑" : instruction.strip());
-        if (retention != null && outcome.get("retired") instanceof List<?> retired)
-            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
-        generate(userId, queueId, 1);
-        return store.status(userId, queueId);
+        mutationGuard.run();
+        if (edited.equals(current)) return store.status(userId, queueId);
+        return store.proposeScriptRevision(userId, queueId, "REVISE", number, List.of(edited),
+                manual ? "手工编辑" : instruction.strip(), baseline, mutationGuard);
     }
 
     /**
      * 整篇重写：改格式或结构时用（例如“不要导读，只要英语-汉语-英语两遍-下一句”）。
-     * 结果直接写回同一条音频的同一批分段，然后只重新合成第 1 段，用户确认后再按需生成其余。
+     * 结果先成为待确认修改；确认后再写回并合成第一段。
      */
     public Map<String, Object> rewriteWhole(long userId, String queueId, String instruction) {
+        return rewriteWhole(userId, queueId, instruction, () -> { });
+    }
+
+    public Map<String, Object> rewriteWhole(long userId, String queueId, String instruction, Runnable mutationGuard) {
+        return rewriteWhole(userId, queueId, instruction, mutationGuard, null);
+    }
+
+    private Map<String, Object> rewriteWhole(long userId, String queueId, String instruction, Runnable mutationGuard,
+            String requestKey) {
         String request = instruction == null ? "" : instruction.strip();
         if (request.length() < 2)
             throw new ApiException(HttpStatus.BAD_REQUEST, "请写下整篇讲稿想怎么改");
         if (reviser == null)
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿改写不可用，请改为手动编辑后保存");
-        String full = store.fullScript(userId, queueId);
+        var baseline = store.fullScriptRevision(userId, queueId);
+        String full = baseline.script();
         if (full.isBlank())
             throw new ApiException(HttpStatus.BAD_REQUEST, "这条音频还没有讲稿，不能整篇重写");
-        int parts = Math.max(1, ((Number) store.status(userId, queueId).get("total_segments")).intValue());
+        int parts = Math.max(1, baseline.segments().size());
         String rewritten = reviser.rewriteWhole(full, request).strip();
         if (rewritten.length() < 10 || rewritten.length() > 60_000)
             throw new ApiException(HttpStatus.BAD_REQUEST, "重写后的讲稿需为 10 到 60000 个字符");
-        String language = SpeechService.detectLanguage(full);
-        if (!language.equals(SpeechService.detectLanguage(rewritten)))
-            throw new ApiException(HttpStatus.BAD_REQUEST, "重写后的语言和原文不一致，请保持同一种语言");
-        var outcome = store.replaceScripts(userId, queueId, splitInto(rewritten, parts));
-        if (retention != null && outcome.get("retired") instanceof List<?> retired)
-            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
-        generate(userId, queueId, 1);
-        return store.status(userId, queueId);
+        ScriptEditPolicy.validateLanguage(full, rewritten, request, false);
+        mutationGuard.run();
+        return store.proposeScriptRevision(userId, queueId, "REWRITE", null,
+                rewritten.equals(full) ? List.of(full) : splitInto(rewritten, parts), request, baseline, mutationGuard, requestKey);
     }
 
     /**
      * 追加：用户说“再生成一些”“多来几句”时，只在现有讲稿后面续写新内容，
-     * 原有分段与音频保持不变，然后只合成新增的第一段。
+     * 原有分段与音频保持不变，续写也须由用户确认后才应用。
      */
     public Map<String, Object> extendWhole(long userId, String queueId, String instruction) {
+        return extendWhole(userId, queueId, instruction, () -> { });
+    }
+
+    public Map<String, Object> extendWhole(long userId, String queueId, String instruction, Runnable mutationGuard) {
+        return extendWhole(userId, queueId, instruction, mutationGuard, null);
+    }
+
+    private Map<String, Object> extendWhole(long userId, String queueId, String instruction, Runnable mutationGuard,
+            String requestKey) {
         String request = instruction == null ? "" : instruction.strip();
         if (request.length() < 2)
             throw new ApiException(HttpStatus.BAD_REQUEST, "请写下要续写什么、多长、什么难度");
         if (reviser == null)
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "讲稿续写不可用，请改为手动编辑后保存");
-        String full = store.fullScript(userId, queueId);
+        var baseline = store.fullScriptRevision(userId, queueId);
+        String full = baseline.script();
         if (full.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "这条音频还没有讲稿，不能续写");
         String tail = full.length() <= 1200 ? full : full.substring(full.length() - 1200);
         String addition = reviser.extend(tail, request).strip();
         if (addition.length() < 20 || addition.length() > 20_000)
             throw new ApiException(HttpStatus.BAD_REQUEST, "续写内容需为 20 到 20000 个字符");
-        String language = SpeechService.detectLanguage(tail);
-        if (!language.equals(SpeechService.detectLanguage(addition)))
-            throw new ApiException(HttpStatus.BAD_REQUEST, "续写的语言和原文不一致，请保持同一种语言");
-        int segments = Math.max(1, ((Number) store.status(userId, queueId).get("total_segments")).intValue());
+        ScriptEditPolicy.validateLanguage(tail, addition, request, false);
+        int segments = Math.max(1, baseline.segments().size());
         int average = Math.max(200, full.length() / segments);
         List<String> parts = splitInto(addition, Math.max(1, (int) Math.ceil(addition.length() / (double) average)));
-        var outcome = store.appendScripts(userId, queueId, parts);
-        generate(userId, queueId, ((Number) outcome.get("added")).intValue());
-        return store.status(userId, queueId);
+        mutationGuard.run();
+        return store.proposeScriptRevision(userId, queueId, "EXTEND", null, parts, request, baseline, mutationGuard, requestKey);
+    }
+
+    /** Natural-language edits share the same persisted, explicit user review boundary as chat tools. */
+    public Map<String, Object> proposeInstruction(long userId, String queueId, String instruction, String kind,
+            String requestKey) {
+        var replay = store.existingScriptRevision(userId, queueId, requestKey);
+        if (replay.isPresent()) return replay.get();
+        if ("REWRITE".equals(kind)) return rewriteWhole(userId, queueId, instruction, () -> { }, requestKey);
+        if ("EXTEND".equals(kind)) return extendWhole(userId, queueId, instruction, () -> { }, requestKey);
+        throw new ApiException(HttpStatus.BAD_REQUEST, "不支持的讲稿修改类型");
+    }
+
+    public Map<String, Object> scriptRevisions(long userId, String queueId) {
+        return Map.of("revisions", store.scriptRevisions(userId, queueId));
+    }
+
+    public Map<String, Object> acceptScriptRevision(long userId, String queueId, String revisionId, boolean confirmed) {
+        return acceptScriptRevision(userId, queueId, revisionId, confirmed, null);
+    }
+
+    public Map<String, Object> acceptScriptRevision(long userId, String queueId, String revisionId, boolean confirmed,
+            String voiceOverride) {
+        if (confirmed) {
+            var proposal = store.scriptRevisionForReview(userId, queueId, revisionId);
+            if ("PENDING".equals(proposal.get("status"))) {
+                String language = SpeechService.detectLanguage(String.valueOf(proposal.get("after_text")));
+                var command = store.commandForUser(userId, queueId);
+                try {
+                    speech.selectVoice(voiceOverride == null ? command.voice() : voiceOverride.strip(), language);
+                } catch (ApiException unavailableVoice) {
+                    throw new ApiException(unavailableVoice.status(), "修改尚未应用，待审稿已保留。请先选择支持新讲稿语言的音色后再确认："
+                            + unavailableVoice.getMessage());
+                }
+            }
+        }
+        var decision = voiceOverride == null ? store.decideScriptRevision(userId, queueId, revisionId, confirmed, true)
+                : store.decideScriptRevision(userId, queueId, revisionId, confirmed, true, voiceOverride.strip());
+        if (decision.stale()) throw new ApiException(HttpStatus.CONFLICT,
+                "原稿已经改变，这份修改已标记为过期；请查看最新讲稿后重新提出修改");
+        if (!decision.applied()) return decision.snapshot();
+        if (retention != null) for (String audioId : decision.retired()) retention.retire(audioId);
+        // This runs only after the transactional store committed ACCEPTED and the new live text.
+        // Replayed acceptance never starts synthesis again, even if dispatch previously failed.
+        try {
+            generate(userId, queueId, 1, decision.firstSegment());
+        } catch (RuntimeException dispatchError) {
+            var result = new LinkedHashMap<>(store.status(userId, queueId));
+            result.put("script_revision", decision.snapshot().get("script_revision"));
+            result.put("synthesis_notice", "修改已确认并保存，音频尚未开始生成；可稍后继续合成");
+            return result;
+        }
+        var result = new LinkedHashMap<>(store.status(userId, queueId));
+        result.put("script_revision", decision.snapshot().get("script_revision"));
+        return result;
+    }
+
+    public Map<String, Object> rejectScriptRevision(long userId, String queueId, String revisionId, boolean confirmed) {
+        return store.decideScriptRevision(userId, queueId, revisionId, confirmed, false).snapshot();
+    }
+
+    public Map<String, Object> revertScriptRevision(long userId, String queueId, String revisionId, boolean confirmed) {
+        return store.revertScriptRevision(userId, queueId, revisionId, confirmed);
     }
     /** 把整篇文本按句子边界均匀装进 parts 段，尽量保持用户熟悉的页数。 */
     static List<String> splitInto(String script, int parts) {
@@ -294,9 +378,9 @@ public class ContinuousAudioService {
         if (text.isEmpty()) return List.of();
         if (parts <= 1) return List.of(text);
         List<String> sentences = new ArrayList<>();
-        for (String piece : text.split("(?<=[。！？!?；;])|\\n\\s*\\n")) {
-            String trimmed = piece.strip();
-            if (!trimmed.isEmpty()) sentences.add(trimmed);
+        // 仅在边界切开，不吃掉空行/空格；否则装回同一页时英文单词会粘连。
+        for (String piece : text.split("(?<=[。！？!?；;])|(?<=\\n)(?=\\s*\\n)")) {
+            if (!piece.isBlank()) sentences.add(piece);
         }
         if (sentences.size() <= 1) return List.of(text);
         int target = Math.max(1, (int) Math.ceil(text.length() / (double) parts));
@@ -314,19 +398,17 @@ public class ContinuousAudioService {
         return result.isEmpty() ? List.of(text) : result;
     }
 
-    /** 撤回上一版讲稿：把这一段改回上一次修订前的文字，并重新合成这一段。 */
+    /** 撤回上一版讲稿：先生成差异提案，由用户确认后恢复。 */
     public Map<String, Object> undoRevision(long userId, String queueId, int number) {
+        return undoRevision(userId, queueId, number, () -> { });
+    }
+
+    public Map<String, Object> undoRevision(long userId, String queueId, int number, Runnable mutationGuard) {
+        var baseline = store.scriptRevision(userId, queueId, number);
         String previous = store.previousScript(userId, queueId, number)
                 .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "这一段还没有可撤回的改稿"));
-        String current = store.segmentScript(userId, queueId, number);
-        var outcome = store.reviseScript(userId, queueId, number, previous, "撤回上一版");
-        if (retention != null && outcome.get("retired") instanceof List<?> retired)
-            for (Object audioId : retired) retention.retire(String.valueOf(audioId));
-        generate(userId, queueId, 1);
-        var result = new java.util.LinkedHashMap<String, Object>(store.status(userId, queueId));
-        result.put("restored_from_characters", current.length());
-        result.put("restored_characters", previous.length());
-        return result;
+        return store.proposeScriptRevision(userId, queueId, "UNDO", number, List.of(previous),
+                "撤回上一版", baseline, mutationGuard);
     }
 
     public Map<String, Object> refill(long userId, String queueId) {
@@ -379,20 +461,25 @@ public class ContinuousAudioService {
     }
 
     private void generate(long userId, String queueId, int maximum) {
+        generate(userId, queueId, maximum, null);
+    }
+
+    private void generate(long userId, String queueId, int maximum, Integer firstSegment) {
         var token = store.claimGeneration(userId, queueId);
         if (token.isEmpty()) return;
         try {
-            executor.submit(() -> runGeneration(userId, queueId, maximum, token.get()));
+            executor.submit(() -> runGeneration(userId, queueId, maximum, token.get(), firstSegment));
         } catch (RejectedExecutionException error) {
             store.releaseGeneration(userId, queueId, token.get());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "音频工作线程已满或已停止，队列已释放；请稍后手动继续，不会在后台排队");
         }
     }
 
-    private void runGeneration(long userId, String queueId, int maximum, String token) {
+    private void runGeneration(long userId, String queueId, int maximum, String token, Integer firstSegment) {
                 try {
                     for (int offset = 0; offset < maximum && !Thread.currentThread().isInterrupted(); offset++) {
-                        var next = store.claimNext(userId, queueId, token);
+                        var next = firstSegment == null ? store.claimNext(userId, queueId, token)
+                                : store.claimNext(userId, queueId, token, firstSegment);
                         if (next.isEmpty()) break;
                         var claim = next.get();
                         try {

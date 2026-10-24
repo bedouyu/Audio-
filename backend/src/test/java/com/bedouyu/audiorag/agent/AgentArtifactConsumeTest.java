@@ -1,6 +1,7 @@
 package com.bedouyu.audiorag.agent;
 
 import com.bedouyu.audiorag.rag.OnnxEmbeddingService;
+import com.bedouyu.audiorag.common.Hashing;
 import com.bedouyu.audiorag.rag.QdrantService;
 import com.bedouyu.audiorag.repository.AudioRagRepository;
 import com.bedouyu.audiorag.service.AgentArtifactStore;
@@ -34,6 +35,7 @@ class AgentArtifactConsumeTest {
     @Autowired AudioRagRepository repository;
     @Autowired AgentArtifactStore artifacts;
     @Autowired AgentRunStore runs;
+    private final tools.jackson.databind.ObjectMapper json = new tools.jackson.databind.ObjectMapper();
     @MockitoBean QdrantService qdrant;
     @MockitoBean OnnxEmbeddingService embeddings;
     @MockitoBean MinioStorageService minio;
@@ -46,6 +48,7 @@ class AgentArtifactConsumeTest {
         var draft = artifacts.save(fixture.run, fixture.user, fixture.project, "script_writer",
                 "SCRIPT_DRAFT", "小熊第一次独自走进森林，月亮跟着它回家。", List.of(), List.of());
         String id = String.valueOf(draft.get("id"));
+        approve(fixture, draft);
         // 产物只能在运行中写入；写完后任务才进入“等待确认”。
         runs.finish(fixture.run, "AWAITING_CONFIRMATION", "等待确认讲稿", Map.of());
 
@@ -60,6 +63,33 @@ class AgentArtifactConsumeTest {
         // 已消费的讲稿不能再走人工确认合成。
         assertThatThrownBy(() -> artifacts.beginSynthesis(fixture.user, fixture.project, id))
                 .hasMessageContaining("已被直接生成的音频消费");
+    }
+
+    @Test void revisedAndConsumedScriptsCannotLeaveARunAwaitingOrBeRevivedByALateFinish() {
+        var f = fixture();
+        var old = artifacts.save(f.run, f.user, f.project, "script_writer", "SCRIPT_DRAFT", "旧版正文", List.of(), List.of());
+        approve(f, old);
+        var latest = artifacts.save(f.run, f.user, f.project, "script_writer", "SCRIPT_DRAFT", "修订后的正文", List.of(), List.of());
+        approve(f, latest);
+        runs.finish(f.run, "SUCCEEDED", "已复核", Map.of());
+        artifacts.consume(f.user, f.project, String.valueOf(latest.get("id")));
+        assertThat(artifacts.get(f.user, f.project, String.valueOf(old.get("id"))).get("status")).isEqualTo("SUPERSEDED");
+        assertThat(runs.get(f.user, f.project, f.run).get("status")).isEqualTo("SUCCEEDED");
+        runs.finish(f.run, "AWAITING_CONFIRMATION", "旧快照迟到", Map.of("artifacts", List.of(old, latest)));
+        assertThat(runs.get(f.user, f.project, f.run).get("status")).isEqualTo("SUCCEEDED");
+    }
+
+    @Test void directConsumptionRequiresAReviewOfTheCurrentDraftAndAFinishedRun() {
+        var f = fixture();
+        var old = artifacts.save(f.run, f.user, f.project, "script_writer", "SCRIPT_DRAFT", "已通过的旧稿", List.of(), List.of());
+        approve(f, old);
+        assertThatThrownBy(() -> artifacts.consume(f.user, f.project, String.valueOf(old.get("id"))))
+                .hasMessageContaining("任务仍在运行");
+        var latest = artifacts.save(f.run, f.user, f.project, "script_writer", "SCRIPT_DRAFT", "尚未复核的修订稿", List.of(), List.of());
+        runs.finish(f.run, "SUCCEEDED", "完成", Map.of());
+        assertThatThrownBy(() -> artifacts.consume(f.user, f.project, String.valueOf(latest.get("id"))))
+                .hasMessageContaining("已通过复核报告");
+        assertThat(artifacts.get(f.user, f.project, String.valueOf(latest.get("id"))).get("status")).isEqualTo("DRAFT");
     }
 
     @Test void onlyAScriptDraftCanBeConsumedByTheAudioQueue() {
@@ -81,6 +111,14 @@ class AgentArtifactConsumeTest {
     }
 
     private record Fixture(long user, long project, String run) { }
+
+    private void approve(Fixture f, Map<String, Object> draft) {
+        artifacts.save(f.run, f.user, f.project, "review_agent", "REVIEW_REPORT", json.writeValueAsString(Map.of(
+                "reviewed_artifact_id", draft.get("id"), "content_hash", Hashing.sha256(String.valueOf(draft.get("content"))),
+                "approved", true, "issues", List.of(), "reason", "逐项检查通过",
+                "checks", Map.of("topic", true, "genre", true, "language", true, "ending", true,
+                        "length", true, "citations", true, "readable", true))), List.of(String.valueOf(draft.get("id"))), List.of());
+    }
 
     private Fixture fixture() {
         long user = ((Number) repository.createUser("u" + UUID.randomUUID().toString().substring(0, 12), "password")

@@ -26,8 +26,12 @@ public class AudioInstructionController {
             @Valid @RequestBody AudioInstructionRequest request) {
         long user = user(token);
         var accepted = requests.reserve(user, request);
-        var result = new LinkedHashMap<>(audio.startInstruction(user, accepted.command(), accepted.creation()));
-        result.put("project", accepted.project()); result.put("action", accepted.resume() ? "RESUME" : "GENERATE");
+        var result = new LinkedHashMap<>(accepted.revisionKind() == null
+                ? audio.startInstruction(user, accepted.command(), accepted.creation())
+                : audio.proposeInstruction(user, accepted.creation().queueId(), request.instruction(),
+                        accepted.revisionKind(), request.requestId().toLowerCase(Locale.ROOT)));
+        result.put("project", accepted.project()); result.put("action", accepted.revisionKind() != null
+                ? "REVIEW" : accepted.resume() ? "RESUME" : "GENERATE");
         result.put("request_id", request.requestId());
         boolean terminal = Set.of("COMPLETE", "FAILED", "NEEDS_REVIEW", "CANCELLED").contains(result.get("status"));
         return ResponseEntity.status(terminal ? 200 : 202).body(result);

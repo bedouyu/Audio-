@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { listeningContext, listeningSubmission, playbackSize, queueLesson, readPlayback } from "./audio-center-policy.js";
+import { chatAudioQueueId, listeningContext, listeningSubmission, playbackSize, queueLesson, readPlayback } from "./audio-center-policy.js";
+
+test("chat binds the displayed queue and omits a queue playing in another space", () => {
+  const playback = { project: { id: 7 }, queue: { queue_id: "older-visible-queue" } };
+  assert.equal(chatAudioQueueId(playback, 7), "older-visible-queue");
+  assert.equal(chatAudioQueueId(playback, 8), undefined);
+  assert.equal(chatAudioQueueId(playback, null), undefined);
+  assert.equal(chatAudioQueueId({ project: { id: 7 }, queue: null }, 7), undefined);
+  assert.equal(chatAudioQueueId(undefined, 7), undefined);
+});
 
 test("a listening instruction needs no project, category, duration, audience or fixed voice", () => {
   assert.deepEqual(listeningSubmission("  给我讲一段英文故事  ", null, "", null, () => "one").body,

@@ -136,6 +136,45 @@ class ToolExecutionRuntimeTest {
                         stopped -> assertThat(stopped.code()).isEqualTo("TOOL_RUNTIME_STOPPED"));
     }
 
+    @Test void aModelBackedToolCanOutliveTheOrdinaryToolWaitLimit() {
+        var context = context(new ArrayList<>(), Duration.ofSeconds(5));
+        try (var runtime = new ToolExecutionRuntime(1, 1, 20)) {
+            assertThat(runtime.await(context, context.openToolScope("edit"), 2000, () -> {
+                try { Thread.sleep(100); }
+                catch (InterruptedException interrupted) { throw new IllegalStateException(interrupted); }
+                return "saved";
+            })).isEqualTo("saved");
+        }
+    }
+
+    @Test void aLongerToolAllowanceCannotExtendTheRootDeadline() {
+        var context = context(new ArrayList<>(), Duration.ofMillis(80));
+        try (var runtime = new ToolExecutionRuntime(1, 1, 20)) {
+            assertThatThrownBy(() -> runtime.await(context, context.openToolScope("edit"), 2000, () -> {
+                try { new CountDownLatch(1).await(); }
+                catch (InterruptedException ignored) { }
+                return "late";
+            })).isInstanceOf(AgentBudget.AgentStopped.class);
+        }
+    }
+
+    @Test void slowToolProgressKeepsTheCallerInformedWithoutRestartingWork() {
+        var context = context(new ArrayList<>(), Duration.ofSeconds(5));
+        var pulses = new java.util.concurrent.atomic.AtomicInteger();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        try (var runtime = new ToolExecutionRuntime(1, 1, 2000, 20)) {
+            var result = runtime.await(context, context.openToolScope("edit"), 0, () -> {
+                calls.incrementAndGet();
+                try { Thread.sleep(100); }
+                catch (InterruptedException failure) { throw new IllegalStateException(failure); }
+                return "saved";
+            }, pulses::incrementAndGet);
+            assertThat(result).isEqualTo("saved");
+            assertThat(pulses.get()).isPositive();
+            assertThat(calls.get()).isEqualTo(1);
+        }
+    }
+
     private static Thread waitingCaller(ToolExecutionRuntime runtime, CountDownLatch release,
                                        CountDownLatch entered, List<Throwable> failures) {
         return new Thread(() -> {

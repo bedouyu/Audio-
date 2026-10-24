@@ -258,6 +258,7 @@ onMounted(async () => {
       </aside>
       <ChatPanel
         :workspace="workspace"
+        :audio="audio"
         :key="state.project.id"
         @trace="trace = $event"
         @show-artifacts="tab = 'agent'"

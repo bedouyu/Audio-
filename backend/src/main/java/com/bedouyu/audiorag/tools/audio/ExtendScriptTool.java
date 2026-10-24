@@ -13,7 +13,7 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * 在当前音频的讲稿后面追加新内容（“再生成一些”“多来几句”）。
- * 与 rewrite_script 的区别：不动已有段落，只在末尾续写并合成新增的第一段。
+ * 不动已有段落，新增内容先等待用户确认。
  */
 @Component
 public class ExtendScriptTool implements FunctionTool {
@@ -26,12 +26,13 @@ public class ExtendScriptTool implements FunctionTool {
     }
 
     public boolean hasSideEffects() { return true; }
+    public long minimumTimeoutMillis() { return 270_000L; }
 
     public FunctionDefinition definition() {
         return new FunctionDefinition("extend_script",
-                "在现有讲稿后面追加新内容，直接写进右侧稿子并只合成新增的第一段。"
+                "提出在现有讲稿后面追加新内容的修改，等待用户审阅绿色新增内容并确认。"
                         + "用户说“再生成一些”“多来几句”“按这个格式再来 10 句”“换成六级水平再加几句”时用它；"
-                        + "已有段落不会被改动。要整篇重排用 rewrite_script，改某一段用 revise_segment。",
+                        + "工具不直接写回或合成，你不能替用户确认。要整篇重排用 rewrite_script，改某一段用 revise_segment。",
                 ToolSchemas.object(Map.of(
                         "instruction", ToolSchemas.string(1000),
                         "queue_id", ToolSchemas.string(36)), "instruction"));
@@ -44,11 +45,12 @@ public class ExtendScriptTool implements FunctionTool {
         String queueId = target.resolve(context, args.path("queue_id").asText(""));
         var service = audio.getIfAvailable();
         if (service == null) throw new IllegalStateException("音频服务不可用");
-        Map<String, Object> snapshot = service.extendWhole(context.userId, queueId, instruction);
+        Map<String, Object> snapshot = service.extendWhole(context.userId, queueId, instruction, context::assertActive);
         int segments = snapshot.get("segments") instanceof List<?> list ? list.size() : 0;
         return Map.of("queue_id", String.valueOf(snapshot.get("queue_id")),
                 "status", String.valueOf(snapshot.get("status")),
                 "segments", segments,
-                "note", "已在原有讲稿后追加内容，只合成了新增的第一段");
+                "script_revision", AudioToolTarget.revisionSummary(snapshot),
+                "note", "续写修改已生成，等待用户在右侧确认；原稿与音频保持不变。");
     }
 }

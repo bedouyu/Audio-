@@ -11,7 +11,7 @@ $env:JAVA_HOME = $javaRoot
 $env:Path = "$javaRoot\bin;$nodeRoot;$env:Path"
 $audioRepo = Join-Path $audioRoot '.cache\m2'
 Set-Location -LiteralPath (Join-Path $audioRoot 'backend')
-& $mvnExe "-Dmaven.repo.local=$audioRepo" verify
+& $mvnExe "-Dmaven.repo.local=$audioRepo" clean verify
 if ($LASTEXITCODE -ne 0) { throw 'Backend verification failed.' }
 Set-Location -LiteralPath (Join-Path $audioRoot 'desktop')
 & $npmExe test

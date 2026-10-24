@@ -2,9 +2,8 @@ package com.bedouyu.audiorag.rag;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.springframework.stereotype.Component;
 
-@Component
+/** 仅用于回归比较的旧版 900/120 字符窗口，不注册为生产组件。 */
 public class TextChunker {
     private static final int CHUNK_SIZE = 900;
     private static final int OVERLAP = 120;

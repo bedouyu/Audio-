@@ -39,8 +39,10 @@ public class NaturalAudioRequestStore {
             if (!fingerprint.equals(receipt.get().getFingerprint()))
                 throw new ApiException(HttpStatus.CONFLICT, "同一 request_id 不能用于不同的收听指令");
             var command = queues.commandForUser(userId, receipt.get().getQueueId());
+            String revisionKind = receipt.get().getAction().startsWith("REVIEW_")
+                    ? receipt.get().getAction().substring("REVIEW_".length()) : null;
             return new Accepted(projects.project(userId, receipt.get().getProjectId()), command,
-                    new ContinuousAudioStore.Creation(receipt.get().getQueueId(), null, false), true);
+                    new ContinuousAudioStore.Creation(receipt.get().getQueueId(), null, false), revisionKind == null, revisionKind);
         }
         var replay = queues.naturalRequest(userId, id);
         if (replay.isPresent()) {
@@ -54,7 +56,9 @@ public class NaturalAudioRequestStore {
         Map<String, Object> project = request.projectId() == null ? null : projects.project(userId, request.projectId());
         if (project == null && request.sourceRecordId() != null) project = projects.projectForKnowledge(userId, request.sourceRecordId());
         boolean progressQuestion = matches(instruction, "(?i)^(?:现在|目前|当前|这件事|它|刚才).{0,12}(?:新进展|新消息|新的消息|更新)|^(?:any|what|are there).{0,20}new developments");
-        boolean contextual = request.previousQueueId() != null || progressQuestion || matches(instruction, "(?i)刚才|上一(?:段|集|章|期)|上次|接着|继续|续写|换成|改成|短一点|长一点|下一章|previous|continue|resume|shorter|longer");
+        boolean contextual = request.previousQueueId() != null || progressQuestion
+                || matches(instruction, "(?i)刚才|上一(?:段|集|章|期)|上次|接着|继续|续写|换成|改成|短一点|长一点|下一章|previous|continue|resume|shorter|longer")
+                || matches(instruction, "(?i)^(?:请|帮我|麻烦)?(?:修改|改写|重写|缩短|加长|删掉|删除|去掉|追加|再生成一些|多来|再来|rewrite\\b|revise\\b|extend\\b|append\\b)");
         String previousId = request.previousQueueId() == null ? null : uuid(request.previousQueueId());
         if (contextual && previousId == null) previousId = project == null ? queues.latestQueueForUser(userId).orElse(null)
                 : queues.latestQueue(userId, ((Number) project.get("id")).longValue()).orElse(null);
@@ -72,6 +76,16 @@ public class NaturalAudioRequestStore {
         if (previous == null && request.projectId() == null && request.sourceRecordId() == null
                 && matches(instruction, "(?i)^(?:下一章|next chapter)[。！!\\s]*$"))
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "请先打开要接续的原文音频，再指定下一章");
+
+        // 自然语言入口的改稿也先进入差异审核，不另建队列直接合成。
+        String revisionKind = contextual && request.sourceRecordId() == null ? scriptRevisionKind(instruction) : null;
+        if (revisionKind != null) {
+            if (previous == null)
+                throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "请先打开要修改的音频，再描述修改要求");
+            receipts.saveAndFlush(new AudioInstructionReceipt(userId, previous.projectId(), id, fingerprint,
+                    previousId, "REVIEW_" + revisionKind));
+            return new Accepted(project, previous, new ContinuousAudioStore.Creation(previousId, null, false), false, revisionKind);
+        }
 
         int fallback = previous == null ? 5 : previous.courseMinutes();
         if (matches(instruction, "(?i)短一点|缩短|shorter")) fallback = Math.max(1, fallback / 2);
@@ -128,5 +142,26 @@ public class NaturalAudioRequestStore {
             return input.toLowerCase(Locale.ROOT);
         } catch (IllegalArgumentException invalid) { throw new ApiException(HttpStatus.BAD_REQUEST, "request_id 必须是标准 UUID"); }
     }
-    public record Accepted(Map<String, Object> project, QueueCommand command, ContinuousAudioStore.Creation creation, boolean resume) { }
+    private static String scriptRevisionKind(String instruction) {
+        String command = instruction.strip().replaceFirst("^(?:(?:请你|请|帮我|麻烦你|麻烦|能不能|可以)\\s*)+", "");
+        // 新主题里可能包含“修改个人信息”等词，不能因存在旧音频而覆盖它。
+        if (matches(command, "(?i)^(?:给我)?(?:做(?:一|个|期)|制作|生成(?:一|个|篇)|写(?:一|个|篇)|创作|介绍|讲解|讲讲|讲一(?:个|段)|来一(?:个|段)|create\\b|write\\b|tell\\b|explain\\b)"))
+            return null;
+        boolean currentTarget = matches(command, "(?i)当前|现有|原来|原稿|上一版|刚才|这(?:份|篇|段|条|个)?(?:讲稿|音频|正文|稿子|内容)|(?:所有|这些|全部)(?:的)?(?:段落|内容|句子)|\\b(?:current|previous|this)\\s+(?:script|audio|draft)\\b");
+        String append = "(?i)续写|追加|再生成一些|多来(?:几|十|点|一些)|再来(?:几|十|点|一些)|继续写|接着写|继续讲|接着讲|\\b(?:extend|append)\\b";
+        if (matches(command, "(?i)^(?:按(?:照)?(?:这个|刚才|当前|原来).{0,20})?(?:续写|追加|再生成一些|多来|再来|继续写|接着写|继续讲|接着讲|extend\\b|append\\b)")
+                || currentTarget && matches(command, append))
+            return "EXTEND";
+        String rewrite = "(?i)改成|换成.{0,12}(?:语|文|格式|风格)|修改|改写|重写|缩短|短一点|长一点|加长|删掉|删除|去掉|\\b(?:rewrite|revise|shorter|longer)\\b";
+        if (matches(command, "(?i)^(?:改成|换成.{0,12}(?:语|文|格式|风格)|修改|改写|重写|缩短|短一点|长一点|加长|删掉|删除|去掉|rewrite\\b|revise\\b|shorter\\b|longer\\b)")
+                || currentTarget && matches(command, rewrite))
+            return "REWRITE";
+        return null;
+    }
+    public record Accepted(Map<String, Object> project, QueueCommand command, ContinuousAudioStore.Creation creation,
+                           boolean resume, String revisionKind) {
+        public Accepted(Map<String, Object> project, QueueCommand command, ContinuousAudioStore.Creation creation, boolean resume) {
+            this(project, command, creation, resume, null);
+        }
+    }
 }

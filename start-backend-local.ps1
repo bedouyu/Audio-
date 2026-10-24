@@ -22,7 +22,7 @@ Set-Location -LiteralPath (Join-Path $audioRoot 'backend')
 $mavenExe = Get-MavenExecutable
 $audioRepo = Join-Path $audioRoot '.cache\m2'
 Write-Host 'Building Audio智能助手 Java 17 backend...' -ForegroundColor Green
-& $mavenExe "-Dmaven.repo.local=$audioRepo" -DskipTests package
+& $mavenExe "-Dmaven.repo.local=$audioRepo" -DskipTests clean package
 if ($LASTEXITCODE -ne 0) { throw 'Backend build failed.' }
 Write-Host 'Starting backend. Health: http://127.0.0.1:18081/api/health' -ForegroundColor Green
 & (Join-Path $javaRoot 'bin\java.exe') '-Dfile.encoding=UTF-8' '-Djava.net.useSystemProxies=true' -jar (Join-Path $audioRoot 'backend\target\audiorag-backend.jar')

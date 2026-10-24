@@ -1,7 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Headphones, Play } from "lucide-vue-next";
-import { canRefill } from "../../../shared/audio-queue-policy.js";
 import AudioRequestComposer from "./AudioRequestComposer.vue";
 import AudioHistory from "./AudioHistory.vue";
 import ReasonDialog from "./ReasonDialog.vue";
@@ -11,86 +10,10 @@ const emit = defineEmits(["submit"]);
 const { state, safe, refreshProject } = props.workspace;
 const { state: playback, current, message } = props.audio;
 const resetTarget = ref(null);
-const scriptInfo = ref(null);
-const scriptOpen = ref(false);
 const scriptBusy = ref(false);
-const revoiceVoice = ref("");
-const contentLanguages = computed(() => {
-  const ready = (playback.queue?.lessons || []).map(item => item.script || "").join(" ");
-  // 失败的队列还没有就绪片段，用原始要求兜底；标题往往是中文，只在没有要求时使用，
-  // 否则会把英文内容的可选项污染成"中英双语"。
-  const texts = ready || playback.queue?.instruction || playback.queue?.title || "";
-  const languages = [];
-  if (/[\u3400-\u9fff]/.test(texts)) languages.push("zh");
-  if (/[A-Za-z]/.test(texts)) languages.push("en");
-  return languages;
-});
-const revoiceOptions = computed(() => {
-  const voices = playback.voices || [];
-  // 判断不出内容语言时不再过滤，交给后端给出准确结论。
-  if (!contentLanguages.value.length) return voices;
-  return voices.filter((voice) => {
-    const supported = Array.isArray(voice.languages) ? voice.languages : [String(voice.locale || "").toLowerCase()];
-    return contentLanguages.value.some(language => supported.includes(language));
-  });
-});
-// 只要有脚本片段就显示换音色入口：已完成的直接换，上次失败的也能从这里重念。
-// 没有 queue_id 的旧归档记录无法定位队列，直接不显示以免点了没反应。
-const canRevoice = computed(() => active.value && !!playback.queue?.queue_id
-  && playback.queue?.status !== "CANCELLED"
-  && (playback.queue?.total_segments || 0) > 0 && revoiceOptions.value.length > 0);
-const revoiceBlocked = computed(() => ["PREPARING", "GENERATING"].includes(playback.queue?.status));
-const revoiceStartsOver = computed(() => (playback.queue?.lessons?.length || 0) === 0);
 // 后端可能重启过，登录时读到的音色列表会变旧；进入音频页时再刷一次。
 onMounted(() => props.audio.refreshVoices?.());
-async function confirmRevoice() {
-  const voice = revoiceOptions.value.find(item => item.name === revoiceVoice.value);
-  if (!voice) return;
-  const segments = playback.queue?.lessons?.length || 0;
-  if (!confirm(`用「${voice.display_name || voice.name}」重新念这 ${segments} 段？\n\n讲稿和内容不会变，只重新合成语音；按当前时长大约需要几分钟。原音色的音频会保留 8 小时，之后自动清理。`)) return;
-  await props.audio.revoice(voice.name);
-}
 const active = computed(() => playback.queue && playback.project?.id === state.project?.id);
-// 逐段改讲稿：先打开某段，再按意见改写或直接保存手工文本；只重合成这一段。
-const editing = ref(null);
-const editText = ref("");
-const editInstruction = ref("");
-const scriptExpanded = ref(false);
-// 讲稿常驻显示：完成时取正在播的那段；合成中（没有 lessons）取该段最新文字。
-const segmentScript = (number) => (playback.queue?.segments || [])
-  .find(item => item.segment_number === number)?.script || "";
-const currentScript = computed(() => current.value?.script
-  || segmentScript((playback.index || 0) + 1)
-  || segmentScript(1));
-const scriptClamp = computed(() => !scriptExpanded.value && currentScript.value.length > 420);
-function openEditor(segment) {
-  editing.value = segment.segment_number;
-  editText.value = segment.script || "";
-  editInstruction.value = "";
-}
-function closeEditor() {
-  editing.value = null;
-}
-async function applyInstruction() {
-  const number = editing.value;
-  const instruction = editInstruction.value.trim();
-  if (!number || !instruction) return;
-  if (!confirm(`让模型按「${instruction}」改写第 ${number} 段？\n\n只改这一段讲稿，改完只重新合成这一段，其余段不动。`)) return;
-  if (await props.audio.reviseSegment(number, { instruction })) closeEditor();
-}
-async function saveEditedText() {
-  const number = editing.value;
-  const text = editText.value.trim();
-  if (!number || !text) return;
-  if (!confirm(`保存第 ${number} 段的手工修改，并重新合成这一段？`)) return;
-  if (await props.audio.reviseSegment(number, { text })) closeEditor();
-}
-/** 撤回上一版：把这一段改回修订前的文字（旧稿在审计里，再点一次可以回到被撤回的版本）。 */
-async function undoRevision(segment) {
-  if (!confirm(`把第 ${segment.segment_number} 段改回上一版，并重新合成？`)) return;
-  if (await props.audio.undoRevision(segment.segment_number)) closeEditor();
-}
-const canUndo = (segment) => (segment.audit || []).some(entry => entry.action === "REVISE_SCRIPT");
 const records = computed(() => state.records.filter(item => item.record_type === "lesson" && item.metadata?.audio_url));
 const history = computed(() => playback.history.filter(item => item.project_id === state.project?.id));
 const sources = computed(() => {
@@ -98,32 +21,24 @@ const sources = computed(() => {
   return Array.isArray(citations) ? citations : [];
 });
 function openSource(source) { if (/^https?:\/\//.test(source || "")) window.audioAgent.openSource(source); }
-// 讲稿以"记事本"形式常驻在右侧：分页浏览、直接编辑，保存后只重念这一段。
+// 讲稿常驻右侧；修改先审阅差异，明确确认后才写回并重念。
 let idleTimer = null;
+const panel = ref(null);
 onMounted(() => {
-  // agent 可能在对话里改了讲稿：每 10 秒轻量对齐一次，静止时几乎无开销。
-  idleTimer = setInterval(() => { if (document.visibilityState === "visible") props.audio.refresh(); }, 10000);
+  // v-show 隐藏的面板仍会挂载；只有当前空间的稿纸实际可见时才做额外对齐。
+  idleTimer = setInterval(() => {
+    if (active.value && document.visibilityState === "visible" && panel.value?.getClientRects().length)
+      props.audio.refresh();
+  }, 10000);
 });
 onBeforeUnmount(() => { if (idleTimer) clearInterval(idleTimer); });
-const scriptSegments = computed(() => (playback.queue?.segments || []).filter(segment => segment.script));
-const readyCount = computed(() => (playback.queue?.segments || []).filter(s => s.status === "READY").length);
-const pendingCount = computed(() => (playback.queue?.segments || []).filter(s => s.status === "PENDING").length);
-async function saveNotebook(payload) {
-  if (!confirm(`保存第 ${payload.number} 段的讲稿，并重新合成这一段？`)) return;
-  await props.audio.reviseSegment(payload.number, { text: payload.text });
+const scriptSegments = computed(() => active.value ? (playback.queue?.segments || []).filter(segment => segment.script) : []);
+function saveNotebook(payload) {
+  return props.audio.reviseSegment(payload.number, { text: payload.text }, payload.queueId, payload.expectedScriptHash);
 }
-async function rewriteWhole(instruction) {
-  if (!confirm("整篇重写讲稿？会重新写回右侧稿子，并只重新合成第 1 段。")) return;
-  await props.audio.rewriteWhole(instruction);
-}
-async function extendScript(instruction) {
-  if (!confirm("在现有讲稿后面追加内容？原有段落不会改动，只合成新增的第一段。")) return;
-  await props.audio.extendWhole(instruction);
-}
-async function undoNotebook(number) {
-  if (!confirm(`把第 ${number} 段改回上一版，并重新合成？`)) return;
-  await props.audio.undoRevision(number);
-}
+function acceptRevision(id, voice) { return props.audio.acceptScriptRevision(id, playback.queue?.queue_id, voice); }
+function rejectRevision(id) { return props.audio.rejectScriptRevision(id, playback.queue?.queue_id); }
+function revertRevision(id) { return props.audio.revertScriptRevision(id, playback.queue?.queue_id); }
 async function recover(segment) {
   if (!confirm("核验这段已有音频并恢复？不会再次调用语音合成。")) return;
   await safe(async () => { await props.audio.reviewSegment(segment); await refreshProject(); });
@@ -131,14 +46,6 @@ async function recover(segment) {
 async function reset(reason) {
   const segment = resetTarget.value; resetTarget.value = null;
   if (segment) await safe(() => props.audio.reviewSegment(segment, reason));
-}
-async function loadFullScript() {
-  scriptBusy.value = true;
-  try {
-    scriptInfo.value = await props.audio.loadScript();
-    scriptOpen.value = !!scriptInfo.value;
-  } catch (error) { state.notice = error.message; }
-  finally { scriptBusy.value = false; }
 }
 async function exportFullScript() {
   scriptBusy.value = true;
@@ -159,17 +66,21 @@ async function exportRecord(record) {
 }
 </script>
 <template>
-  <section class="panel audio-center-panel">
+  <section ref="panel" class="panel audio-center-panel">
     <ReasonDialog :open="!!resetTarget" title="重置音频片段" message="旧音频和操作记录会保留。重置后请点击继续生成，才会发起新的合成尝试。"
       @cancel="resetTarget = null" @confirm="reset" />
     <div class="panel-heading"><div><div class="eyebrow">LISTEN & EXPLORE</div><h2>{{ state.project.title }}</h2></div><Headphones :size="26" class="accent" /></div>
     <p class="muted">
-      <template v-if="scriptSegments.length">右侧是讲稿，直接在上面改会自动保存；换格式、续写、换音色、多合成几段，都直接在左边对话里说。</template>
+      <template v-if="scriptSegments.length">可以直接编辑讲稿，也可以在左边说出修改要求。新增标绿、删除标红，确认后才应用；选择保留原稿即可放弃修改。</template>
       <template v-else>说一句想听什么，会结合这个空间的资料准备内容。</template>
     </p>
     <template v-if="scriptSegments.length">
-      <ScriptNotebook :segments="scriptSegments" :busy="playback.revising != null"
-        @save="saveNotebook" />
+      <ScriptNotebook :key="state.user?.id + ':' + playback.queue?.queue_id" :segments="scriptSegments"
+        :queue-id="playback.queue?.queue_id" :owner-id="state.user?.id"
+        :drafts="playback.scriptDrafts" :busy="playback.revising != null || playback.revoicing" :save="saveNotebook"
+        :revisions="playback.queue?.script_revisions || []" :accept-revision="acceptRevision"
+        :reject-revision="rejectRevision" :revert-revision="revertRevision" :request-error="playback.error"
+        :voices="playback.voices" :current-voice="playback.queue?.voice" />
       <details class="new-audio-entry">
         <summary>＋ 制作一条新音频（换主题或重新生成）</summary>
         <AudioRequestComposer :audio="audio" compact @submit="emit('submit', $event)" />
@@ -181,7 +92,7 @@ async function exportRecord(record) {
       <p>{{ message }}</p>
       <p v-if="playback.instruction" class="muted">你的要求：{{ playback.instruction }}</p>
       <p class="muted">底部播放器可连续播放，返回首页也能继续收听。</p>
-      <p v-if="canRevoice" class="muted">讲稿不变；换音色直接在左边说「换成我的声音」或「换成官方示例音色」。</p>
+      <p v-if="scriptSegments.length" class="muted">讲稿不变；换音色直接在左边说「换成我的声音」或「换成官方示例音色」。</p>
       <details v-if="sources.length"><summary>参考来源 · {{ sources.length }}</summary>
         <div v-for="(item, index) in sources" :key="index" class="content-source">
           <button v-if="/^https?:\/\//.test(item.source || item.url || '')" @click="openSource(item.source || item.url)">{{ item.title || item.source || item.url }}</button>
@@ -202,7 +113,7 @@ async function exportRecord(record) {
       </details>
     </div>
     <div v-if="active" class="card">
-      <div class="row spaced"><h3>完整讲稿</h3><span class="badge">{{ scriptInfo ? scriptInfo.characters + " 字" : (playback.queue.lessons?.length || 0) + " 段" }}</span></div>
+      <div class="row spaced"><h3>完整讲稿</h3><span class="badge">{{ scriptSegments.length }} 段</span></div>
       <p class="muted">把各段正文合并成一份，导出后是一个文件，可直接保存或继续修改。</p>
       <div class="row">
         <button :disabled="scriptBusy" @click="exportFullScript">导出为文件</button>

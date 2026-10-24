@@ -42,10 +42,19 @@ public class AgentOrchestrator {
     public boolean available() { return enabled && model.configured(); }
     public Map<String, Object> chat(long user, AudioAgent.ChatCommand command, Consumer<String> token,
                                    Consumer<Map<String, Object>> sink) {
+        return chat(user, command, token, sink, ignored -> { });
+    }
+    /** 先公布本次 run 的身份，调用失败后也能精确找回同一任务的已保存产物。 */
+    public Map<String, Object> chat(long user, AudioAgent.ChatCommand command, Consumer<String> token,
+                                   Consumer<Map<String, Object>> sink, Consumer<String> runStarted) {
         try (var reservation = requests.begin(user, command)) {
-        if (reservation.replay() != null) return reservation.replay();
+        if (reservation.replay() != null) {
+            runStarted.accept(String.valueOf(reservation.replay().get("run_id")));
+            return reservation.replay();
+        }
         String session = reservation.sessionId();
         String run = reservation.runId();
+        runStarted.accept(run);
         AgentBudget budget = new AgentBudget(modelLimit, toolLimit, java.time.Duration.ofMinutes(10));
         EvidenceLedger evidence = new EvidenceLedger();
         Consumer<Map<String, Object>> events = event -> {
@@ -54,6 +63,8 @@ public class AgentOrchestrator {
         };
         var context = new AgentExecutionContext(run, session, "supervisor", user, command.projectId(),
                 budget, evidence, null, this::delegate, events);
+        context.audioQueueId = command.audioQueueId();
+        context.audioRequest = command.audioRequest();
         try {
             context.taskSpecification = specifications.resolve(command.message(), command.requiredArtifacts());
             context.taskSpecificationDeclared = !context.taskSpecification.requiredArtifacts().isEmpty()

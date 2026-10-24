@@ -2,7 +2,6 @@ package com.bedouyu.audiorag;
 
 import com.bedouyu.audiorag.repository.AudioRagRepository;
 import com.bedouyu.audiorag.service.LearningPlanService;
-import com.bedouyu.audiorag.service.memory.ConversationMemory;
 import com.bedouyu.audiorag.rag.QdrantService;
 import com.bedouyu.audiorag.rag.OnnxEmbeddingService;
 import com.bedouyu.audiorag.tools.storage.MinioStorageService;
@@ -31,7 +30,6 @@ import static org.mockito.Mockito.*;
 })
 class AudioWorkspaceIntegrationTest {
     @Autowired AudioRagRepository repository;
-    @Autowired ConversationMemory memory;
     @Autowired LearningPlanService learning;
     @Autowired ObjectMapper json;
     @Autowired com.bedouyu.audiorag.rag.index.KnowledgeIndexStore index;
@@ -88,7 +86,8 @@ class AudioWorkspaceIntegrationTest {
         String session = repository.openSession(user, project, null);
         repository.appendMessage(session, "user", "什么是概率测度？");
         repository.appendMessage(session, "assistant", "满足可列可加性。");
-        assertThat(memory.window(session)).hasSize(2);
+        assertThat(memoryContexts.prepare(user, project, session, "继续", "recent_window", 6000, false)
+                .pack().messages()).hasSize(2);
         assertThat(repository.sessionMessages(user, project, session)).hasSize(2);
         String legacy = UUID.randomUUID().toString();
         repository.appendMessage(legacy, "user", "原版问题");
@@ -124,7 +123,8 @@ class AudioWorkspaceIntegrationTest {
         String second = request(client, token, project, id, "继续");
         assertThat(second).contains("history_messages", "2");
         assertThat(repository.sessionMessages(user, project, id)).hasSize(4);
-        assertThat(memory.window(id)).hasSize(4);
+        assertThat(memoryContexts.prepare(user, project, id, "继续", "recent_window", 6000, false)
+                .pack().messages()).hasSize(4);
     }
 
     @Test

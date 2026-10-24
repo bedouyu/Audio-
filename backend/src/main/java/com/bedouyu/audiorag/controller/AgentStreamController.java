@@ -43,7 +43,7 @@ public class AgentStreamController {
             task = workers.submit(() -> {
                 try {
                     send(emitter, "STATUS", "正在检索当前项目资料…");
-                    var result = agent.chat(user, new ChatCommand(request.message(), request.sessionId(), request.projectId(), request.memoryStrategy(), request.requestId(), request.requiredArtifacts()),
+                    var result = agent.chat(user, new ChatCommand(request.message(), request.sessionId(), request.projectId(), request.memoryStrategy(), request.requestId(), request.requiredArtifacts(), false, request.audioQueueId()),
                             token -> send(emitter, "TOKEN", token), event -> send(emitter, "TOOL", event));
                     send(emitter, "RESULT", result);
                     send(emitter, "DONE", "");

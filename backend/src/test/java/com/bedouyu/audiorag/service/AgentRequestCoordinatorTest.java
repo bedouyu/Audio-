@@ -85,6 +85,17 @@ class AgentRequestCoordinatorTest {
         verify(records, times(1)).saveAndFlush(any());
     }
 
+    @Test void changingTheSelectedAudioQueueCannotReuseTheSameRequest() {
+        String selected = UUID.randomUUID().toString();
+        var original = new ChatCommand("改短第二段", null, 7, null, REQUEST, Set.of(), false, selected);
+        try (var first = coordinator.begin(1, original)) { complete("SUCCEEDED"); }
+        try (var replay = coordinator.begin(1, original)) { assertThat(replay.replay()).isNotNull(); }
+        var changed = new ChatCommand("改短第二段", null, 7, null, REQUEST, Set.of(), false, UUID.randomUUID().toString());
+        assertThatThrownBy(() -> coordinator.begin(1, changed)).isInstanceOfSatisfying(ApiException.class,
+                error -> assertThat(error.status()).isEqualTo(HttpStatus.CONFLICT));
+        verify(records, times(1)).saveAndFlush(any());
+    }
+
     @Test void implicitAndExplicitEmptyTaskRequirementsCannotShareAnIdempotencyKey() {
         var original = command("解释概率", null, null, null);
         try (var first = coordinator.begin(1, original)) { complete("SUCCEEDED"); }

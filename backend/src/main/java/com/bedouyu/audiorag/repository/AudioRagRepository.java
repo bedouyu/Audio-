@@ -27,6 +27,9 @@ public class AudioRagRepository {
     private final LearningPointRepository points;
     private final AudioApiMapper mapper;
     private final SecureRandom random = new SecureRandom();
+    private ContinuousAudioScriptRevisionRepository scriptRevisions;
+    @org.springframework.beans.factory.annotation.Autowired
+    void setScriptRevisions(ContinuousAudioScriptRevisionRepository value) { scriptRevisions = value; }
     /** 登录令牌有效期；过期即失效，也可通过 /auth/logout 主动注销。 */
     private static final Duration TOKEN_LIFETIME = Duration.ofDays(30);
 
@@ -224,6 +227,7 @@ public class AudioRagRepository {
     }
     public void deleteProject(long userId, long projectId) {
         requireProject(userId, projectId);
+        if (scriptRevisions != null) scriptRevisions.deleteByOwnedProject(userId, projectId);
         List<String> ids = sessions.findByUserIdAndProjectIdOrderByUpdatedAtDesc(userId, projectId).stream()
                 .map(ChatSession::getId).toList();
         deleteSessions(ids);

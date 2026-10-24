@@ -1,6 +1,7 @@
 package com.bedouyu.audiorag.core;
 
 import com.bedouyu.audiorag.agent.AgentProfile;
+import com.bedouyu.audiorag.common.Hashing;
 import com.bedouyu.audiorag.ai.AgentModelGateway;
 import com.bedouyu.audiorag.config.PromptTemplates;
 import com.bedouyu.audiorag.core.guard.*;
@@ -41,7 +42,8 @@ class CompletionSemanticsTest {
         var profile = new AgentProfile("supervisor", "主控", "", Set.of(), "", 3);
         assertThatThrownBy(() -> validator.validate(profile, "生成讲稿，不要公式", "全部完成", Set.of(), context))
                 .hasMessageContaining("缺少真实产物");
-        when(store.forRun(1, 7, "run")).thenReturn(List.of(Map.of("kind", "SCRIPT_DRAFT"), Map.of("kind", "REVIEW_REPORT")));
+        var script = script("a", "最终讲稿", "DRAFT");
+        when(store.forRun(1, 7, "run")).thenReturn(List.of(script, review(script, true)));
         assertThatCode(() -> validator.validate(profile, "生成讲稿，不要公式", "草稿待确认", Set.of(), context))
                 .doesNotThrowAnyException();
     }
@@ -52,14 +54,61 @@ class CompletionSemanticsTest {
         var context = context("supervisor");
         var profile = new AgentProfile("supervisor", "主控", "", Set.of(), "", 3);
 
-        when(store.forRun(1, 7, "run")).thenReturn(List.of(Map.of("kind", "SCRIPT_DRAFT")));
+        var script = script("a", "最终讲稿", "DRAFT");
+        when(store.forRun(1, 7, "run")).thenReturn(List.of(script));
         assertThatThrownBy(() -> validator.validate(profile, "讲个睡前故事", "讲稿已备好", Set.of(), context))
                 .hasMessageContaining("必须先复核");
 
         when(store.forRun(1, 7, "run")).thenReturn(List.of(
-                Map.of("kind", "SCRIPT_DRAFT"), Map.of("kind", "REVIEW_REPORT")));
+                script, review(script, true)));
         assertThatCode(() -> validator.validate(profile, "讲个睡前故事", "讲稿已复核", Set.of(), context))
                 .doesNotThrowAnyException();
+    }
+
+    @Test void finalRevisionCannotBorrowAnOldOrRejectedReview() {
+        var store = mock(AgentArtifactStore.class);
+        var validator = new AgentOutputValidator(json, store);
+        var context = context("supervisor");
+        context.audioRequest = true;
+        var profile = new AgentProfile("supervisor", "主控", "", Set.of(), "", 3);
+        var old = script("old", "第一份讲稿", "SUPERSEDED");
+        var latest = script("latest", "修订后的讲稿", "DRAFT");
+        for (var outputs : List.of(List.of(old, review(old, true), latest),
+                List.of(latest, review(latest, false)),
+                List.of(latest, review(latest, true), review(latest, false)),
+                List.of(latest, review(script("latest", "不同内容", "DRAFT"), true)))) {
+            when(store.forRun(1, 7, "run")).thenReturn(outputs);
+            assertThatThrownBy(() -> validator.validate(profile, "讲个故事", "讲稿已复核", Set.of(), context))
+                    .hasMessageContaining("当前版本并通过");
+        }
+        when(store.forRun(1, 7, "run")).thenReturn(List.of(old, review(old, false), latest, review(latest, true)));
+        assertThatCode(() -> validator.validate(profile, "讲个故事", "修订稿已复核", Set.of(), context))
+                .doesNotThrowAnyException();
+    }
+
+    @Test void chatMayReturnABoundRejectedReviewForUserRevisionWithoutAuthorizingAudio() {
+        var store = mock(AgentArtifactStore.class);
+        var validator = new AgentOutputValidator(json, store);
+        var context = context("supervisor");
+        var profile = new AgentProfile("supervisor", "主控", "", Set.of(), "", 3);
+        var script = script("a", "仍需改进的讲稿", "DRAFT");
+        when(store.forRun(1, 7, "run")).thenReturn(List.of(script, review(script, false)));
+        assertThatCode(() -> validator.validate(profile, "先出草稿并复核", "复核未通过，请继续修订", Set.of(), context))
+                .doesNotThrowAnyException();
+        context.audioRequest = true;
+        assertThatThrownBy(() -> validator.validate(profile, "直接生成音频", "准备合成", Set.of(), context))
+                .hasMessageContaining("当前版本并通过");
+    }
+
+    private Map<String, Object> script(String id, String text, String status) {
+        return Map.of("kind", "SCRIPT_DRAFT", "id", id, "run_id", "run", "content", text, "status", status);
+    }
+    private Map<String, Object> review(Map<String, Object> script, boolean approved) {
+        return Map.of("kind", "REVIEW_REPORT", "run_id", "run", "content", json.writeValueAsString(Map.of(
+                "reviewed_artifact_id", script.get("id"), "content_hash", Hashing.sha256(String.valueOf(script.get("content"))),
+                "approved", approved, "issues", approved ? List.of() : List.of("还需要修订"), "reason", "逐项核验后的结论",
+                "checks", Map.of("topic", true, "genre", true, "language", true, "ending", true,
+                        "length", true, "citations", true, "readable", true))));
     }
 
     private ReActLoopEngine engine(String status) {

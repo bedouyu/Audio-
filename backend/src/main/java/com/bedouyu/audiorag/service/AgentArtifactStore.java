@@ -2,6 +2,7 @@ package com.bedouyu.audiorag.service;
 
 import com.bedouyu.audiorag.common.ApiException;
 import com.bedouyu.audiorag.common.Hashing;
+import com.bedouyu.audiorag.core.guard.ScriptReviewPolicy;
 import com.bedouyu.audiorag.model.entity.AgentArtifact;
 import com.bedouyu.audiorag.model.entity.AgentRunRecord;
 import com.bedouyu.audiorag.repository.*;
@@ -12,6 +13,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Service
@@ -33,15 +35,24 @@ public class AgentArtifactStore {
         requireProject(user, project);
         var owner = lockRun(user, project, run);
         if (!"RUNNING".equals(owner.getStatus())) throw conflict("任务已结束，不能追加产物");
+        // Locking read sees the preceding writer after waiting for the run lock,
+        // including under MySQL REPEATABLE READ where an earlier ownership read may hold an old snapshot.
+        var previousOutputs = artifacts.lockedForRun(run);
+        // 所有追加都持有 run 锁。使用数据库可保留的毫秒精度并严格递增，
+        // 避免 Instant 纳秒被截断后“最新复核”退化为随机 UUID 的排序。
+        Instant createdAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        var latest = previousOutputs.stream().map(AgentArtifact::getCreatedAt).max(Comparator.naturalOrder());
+        if (latest.isPresent() && !createdAt.isAfter(latest.get()))
+            createdAt = latest.get().truncatedTo(ChronoUnit.MILLIS).plusMillis(1);
         // 复核未通过时主控会重新委派写手；新讲稿必须取代同任务的旧草稿，
         // 否则用户会看到两份"待确认"讲稿，也说不清该确认哪一份。
         // 只对讲稿生效：学习计划允许在同一任务里各自确认，研究报告与复核报告是中间证据。
         if ("SCRIPT_DRAFT".equals(kind))
-            for (var previous : artifacts.findByRunIdOrderByCreatedAtAsc(run))
+            for (var previous : previousOutputs)
                 if (kind.equals(previous.getKind()) && "DRAFT".equals(previous.getStatus()))
                     previous.supersede();
         var artifact = artifacts.saveAndFlush(new AgentArtifact(UUID.randomUUID().toString(), run, user,
-                project, agent, kind, content, json.writeValueAsString(inputIds), json.writeValueAsString(citations)));
+                project, agent, kind, content, json.writeValueAsString(inputIds), json.writeValueAsString(citations), createdAt));
         return view(artifact);
     }
     @Transactional(readOnly = true)
@@ -68,7 +79,16 @@ public class AgentArtifactStore {
         if ("CONSUMED".equals(artifact.getStatus())) return view(artifact);
         if (!"DRAFT".equals(artifact.getStatus()))
             throw conflict("讲稿状态为 " + artifact.getStatus() + "；不能按音频队列消费处理");
+        requireFinishedRun(artifact);
+        var outputs = artifacts.lockedForRun(artifact.getRunId()).stream().map(this::view).toList();
+        var review = ScriptReviewPolicy.approvedReviewFor(outputs, view(artifact), json)
+                .orElseThrow(() -> conflict("当前讲稿尚无绑定同一内容版本的已通过复核报告，不能直接生成音频"));
         artifact.consume();
+        var audit = actionAudit(artifact, "CONSUME", user);
+        audit.put("review_id", review.get("id"));
+        audit.put("review_content_hash", Hashing.sha256(String.valueOf(review.get("content"))));
+        audit.put("review_bound_content_hash", Hashing.sha256(artifact.getContent()));
+        appendAudit(artifact, audit);
         settleRun(artifact);
         return view(artifact);
     }
@@ -215,7 +235,7 @@ public class AgentArtifactStore {
         if (!"AWAITING_CONFIRMATION".equals(run.getStatus())) return;
         var outputs = artifacts.lockedForRun(current.getRunId());
         boolean pending = outputs.stream().anyMatch(a -> Set.of("SCRIPT_DRAFT", "LEARNING_PLAN").contains(a.getKind())
-                && !Set.of("READY", "APPLIED", "CONSUMED").contains(a.getStatus()));
+                && !Set.of("READY", "APPLIED", "CONSUMED", "SUPERSEDED").contains(a.getStatus()));
         if (!pending) {
             Map<String, Object> result = run.getResult() == null ? new LinkedHashMap<>()
                     : new LinkedHashMap<>(json.readValue(run.getResult(), Map.class));
@@ -254,14 +274,11 @@ public class AgentArtifactStore {
         var review = artifacts.findById(reviewId).orElseThrow(this::missing);
         if (review.getUserId() != user || review.getProjectId() != project || !review.getRunId().equals(target.getRunId())
                 || !"REVIEW_REPORT".equals(review.getKind())) throw conflict("审核报告不属于该讲稿任务");
-        try {
-            var report = json.readTree(review.getContent());
-            if (!target.getId().equals(report.path("reviewed_artifact_id").asText())
-                    || !Hashing.sha256(target.getContent()).equals(report.path("content_hash").asText())
-                    || !report.path("approved").isBoolean() || !report.path("approved").asBoolean())
-                throw conflict("审核报告未通过，或未绑定当前讲稿内容");
-        } catch (ApiException rejected) { throw rejected; }
-        catch (RuntimeException malformed) { throw conflict("审核报告格式无效，不能据此确认合成"); }
+        var outputs = artifacts.lockedForRun(target.getRunId()).stream().map(this::view).toList();
+        var current = ScriptReviewPolicy.approvedReviewFor(outputs, view(target), json)
+                .orElseThrow(() -> conflict("当前讲稿的最新复核未通过或不完整，请重新审核，或明确说明人工覆盖理由"));
+        if (!reviewId.equals(current.get("id")))
+            throw conflict("复核报告已更新，请刷新后根据最新复核确认讲稿");
         return review;
     }
     private Map<String, Object> actionAudit(AgentArtifact artifact, String action, long user) {

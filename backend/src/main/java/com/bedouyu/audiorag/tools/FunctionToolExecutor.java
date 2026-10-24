@@ -55,11 +55,14 @@ public class FunctionToolExecutor {
             // 委派在调用方继续运行，子工具再进入执行池；避免所有 worker 等待嵌套 worker 的死锁。
             Object value = "delegate_agent".equals(call.name())
                     ? delegate(tool, args, context, scope, sideEffectStarted)
-                    : runtime.await(context, scope, () -> {
+                    : runtime.await(context, scope, tool.minimumTimeoutMillis(), () -> {
                         requireProject(context);
                         if (tool.hasSideEffects()) sideEffectStarted.set(true);
                         return tool.execute(args, context);
-                    });
+                    }, () -> context.withToolScope(scope, () -> {
+                        context.emit("tool_heartbeat", call.name(), "RUNNING", "正在处理，请稍候", Map.of());
+                        return null;
+                    }));
             context.withToolScope(scope, () -> { context.assertActive(); return null; });
             String observation = json.writeValueAsString(value);
             if (observation.length() > 8000)

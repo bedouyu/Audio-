@@ -9,6 +9,7 @@ import com.bedouyu.audiorag.tools.audio.SpeechService;
 import com.bedouyu.audiorag.tools.storage.MinioStorageService;
 import com.bedouyu.audiorag.tools.research.WebSearchService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -217,6 +218,54 @@ class AgentPersistenceConsistencyTest {
         assertThat(audit.get("override_reason")).isEqualTo("用户已人工逐句核查讲稿内容并接受风险");
         assertThat(audit.get("content_hash")).isEqualTo(hash(script));
         assertThat(status(f)).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
+    void anEarlierApprovalCannotBypassTheLatestRejectedReview() {
+        var f = fixture();
+        var script = script(f);
+        var passed = review(f, script, id(script), hash(script), true);
+        review(f, script, id(script), hash(script), false);
+        finish(f);
+
+        assertConflict(() -> artifacts.beginSynthesis(f.user, f.project, id(script), hash(script), id(passed), false, null));
+        assertThat(artifacts.get(f.user, f.project, id(script))).containsEntry("status", "DRAFT").containsEntry("audio_id", null);
+        verify(speech, never()).synthesize(anyString(), anyString(), any());
+    }
+
+    @Test
+    void anIncompleteOrContradictoryReportCannotAuthorizeManualSynthesis() {
+        for (String invalid : List.of("missing_checks", "failed_check", "unresolved_issue")) {
+            var f = fixture();
+            var script = script(f);
+            Map<String, Object> report = new LinkedHashMap<>();
+            report.put("reviewed_artifact_id", id(script)); report.put("content_hash", hash(script));
+            report.put("approved", true); report.put("reason", "测试复核");
+            report.put("issues", invalid.equals("unresolved_issue") ? List.of("结尾还未完成") : List.of());
+            if (!invalid.equals("missing_checks")) report.put("checks", Map.of("topic", true, "genre", true,
+                    "language", true, "ending", !invalid.equals("failed_check"), "length", true, "citations", true, "readable", true));
+            var review = artifacts.save(f.run, f.user, f.project, "review_agent", "REVIEW_REPORT",
+                    json.writeValueAsString(report), List.of(id(script)), List.of());
+            finish(f);
+            assertConflict(() -> artifacts.beginSynthesis(f.user, f.project, id(script), hash(script), id(review), false, null));
+            assertThat(artifacts.get(f.user, f.project, id(script))).containsEntry("status", "DRAFT");
+        }
+    }
+
+    @RepeatedTest(3)
+    void aNewPassingReportRequiresRefreshingTheSelectedReviewBeforeConfirmation() {
+        var f = fixture();
+        var script = script(f);
+        var previous = review(f, script, id(script), hash(script), true);
+        var latest = review(f, script, id(script), hash(script), true);
+        var persistedPrevious = artifacts.get(f.user, f.project, id(previous));
+        var persistedLatest = artifacts.get(f.user, f.project, id(latest));
+        assertThat((java.time.Instant) persistedLatest.get("created_at"))
+                .isAfter((java.time.Instant) persistedPrevious.get("created_at"));
+        finish(f);
+        assertConflict(() -> artifacts.beginSynthesis(f.user, f.project, id(script), hash(script), id(previous), false, null));
+        assertThat(artifacts.beginSynthesis(f.user, f.project, id(script), hash(script), id(latest), false, null))
+                .containsEntry("status", "GENERATING");
     }
 
     @Test

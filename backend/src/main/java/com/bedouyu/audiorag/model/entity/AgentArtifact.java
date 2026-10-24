@@ -23,8 +23,12 @@ public class AgentArtifact {
     protected AgentArtifact() { }
     public AgentArtifact(String id, String run, long user, long project, String agent,
                          String kind, String content, String inputs, String evidenceJson) {
+        this(id, run, user, project, agent, kind, content, inputs, evidenceJson, Instant.now());
+    }
+    public AgentArtifact(String id, String run, long user, long project, String agent,
+                         String kind, String content, String inputs, String evidenceJson, Instant createdAt) {
         this.id = id; runId = run; userId = user; projectId = project; agentId = agent;
-        this.kind = kind; this.content = content; inputIds = inputs; status = "DRAFT"; createdAt = Instant.now();
+        this.kind = kind; this.content = content; inputIds = inputs; status = "DRAFT"; this.createdAt = createdAt;
         this.evidenceJson = evidenceJson;
     }
     public void generating(String audioId) { this.audioId = audioId; status = "GENERATING"; }

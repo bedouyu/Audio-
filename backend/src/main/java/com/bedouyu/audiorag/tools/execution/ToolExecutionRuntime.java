@@ -20,15 +20,21 @@ import java.util.function.Supplier;
 public class ToolExecutionRuntime implements AutoCloseable {
     private final ThreadPoolExecutor workers;
     private final long timeoutMillis;
+    private final long heartbeatMillis;
     private final ConcurrentMap<Future<?>, AgentExecutionContext.ToolScope> pending = new ConcurrentHashMap<>();
 
     @Autowired
     public ToolExecutionRuntime(@Value("${audiorag.agent.tool-workers:4}") int workerCount,
             @Value("${audiorag.agent.tool-queue-capacity:16}") int queueCapacity,
             @Value("${audiorag.agent.tool-timeout-ms:30000}") long timeoutMillis) {
-        if (workerCount < 1 || queueCapacity < 1 || timeoutMillis < 1)
+        this(workerCount, queueCapacity, timeoutMillis, 10_000);
+    }
+
+    public ToolExecutionRuntime(int workerCount, int queueCapacity, long timeoutMillis, long heartbeatMillis) {
+        if (workerCount < 1 || queueCapacity < 1 || timeoutMillis < 1 || heartbeatMillis < 1)
             throw new IllegalArgumentException("工具线程数、队列容量和超时必须为正数");
         this.timeoutMillis = timeoutMillis;
+        this.heartbeatMillis = heartbeatMillis;
         AtomicInteger sequence = new AtomicInteger();
         workers = new ThreadPoolExecutor(workerCount, workerCount, 30, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(queueCapacity), work -> {
@@ -39,8 +45,19 @@ public class ToolExecutionRuntime implements AutoCloseable {
     }
 
     public <T> T await(AgentExecutionContext context, AgentExecutionContext.ToolScope scope, Supplier<T> work) {
+        return await(context, scope, 0, work);
+    }
+
+    public <T> T await(AgentExecutionContext context, AgentExecutionContext.ToolScope scope,
+                       long minimumTimeoutMillis, Supplier<T> work) {
+        return await(context, scope, minimumTimeoutMillis, work, () -> { });
+    }
+
+    public <T> T await(AgentExecutionContext context, AgentExecutionContext.ToolScope scope,
+                       long minimumTimeoutMillis, Supplier<T> work, Runnable waiting) {
         context.assertActive();
-        long waitMillis = Math.min(timeoutMillis, context.budget.remainingMillis());
+        if (minimumTimeoutMillis < 0) throw new IllegalArgumentException("工具等待下限不能为负数");
+        long waitMillis = Math.min(Math.max(timeoutMillis, minimumTimeoutMillis), context.budget.remainingMillis());
         Future<T> result;
         try {
             result = workers.submit(() -> context.withToolScope(scope, () -> {
@@ -57,8 +74,25 @@ public class ToolExecutionRuntime implements AutoCloseable {
             scope.invalidate("TOOL_RUNTIME_STOPPED", "工具执行器已关闭"); cancel(result);
         }
         try {
-            T value = result.get(waitMillis, TimeUnit.MILLISECONDS);
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMillis);
+            T value;
+            while (true) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) throw new TimeoutException();
+                long slice = Math.min(TimeUnit.MILLISECONDS.toNanos(heartbeatMillis), remaining);
+                try {
+                    value = result.get(slice, TimeUnit.NANOSECONDS);
+                    break;
+                } catch (TimeoutException interval) {
+                    if (deadline - System.nanoTime() <= 0) throw interval;
+                    context.assertActive();
+                    waiting.run();
+                }
+            }
             context.assertActive(); return value;
+        } catch (AgentBudget.AgentStopped stopped) {
+            scope.invalidate(stopped.status(), stopped.getMessage()); cancel(result);
+            throw stopped;
         } catch (TimeoutException expired) {
             scope.invalidate("TOOL_TIMEOUT", "工具超过等待时限，晚到结果已作废");
             cancel(result);
@@ -77,6 +111,9 @@ public class ToolExecutionRuntime implements AutoCloseable {
         } catch (CancellationException stopped) {
             scope.invalidate("TOOL_RUNTIME_STOPPED", "工具执行器已关闭，结果不再使用");
             throw new ToolExecutionFailure("TOOL_RUNTIME_STOPPED", "工具执行器已关闭，结果不再使用");
+        } catch (RuntimeException observerFailure) {
+            scope.invalidate("TOOL_RUNTIME_STOPPED", "工具进展通道异常，结果需要核查"); cancel(result);
+            throw new ToolExecutionFailure("TOOL_RUNTIME_STOPPED", "工具进展通道异常；不会自动重试，可能的副作用需核查");
         } finally {
             pending.remove(result);
         }
